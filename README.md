@@ -1,4 +1,4 @@
-#Global Redundancy Resolution
+# Global Redundancy Resolution
 
 Kris Hauser, Scott Emmons
 kris.hauser@duke.edu, scott.emmons@duke.edu
@@ -15,11 +15,23 @@ More information and examples can be found at:
 
 ## Prerequisites
 
-The main requirements are Python 2.7, the Klamp't Python API, and scipy.  Instructions for installing Klamp't can be found here:
+The main requirements are Python 2.7, the Klamp't Python API, the IKDB library, and scipy.
+
+Instructions for installing Klamp't can be found here:
 
    http://motion.pratt.duke.edu/klampt/tutorial_install.html
 
-Version 0.7+ is required.  Moreover, many of the example problems refer to the robot files in the Klampt/data folder.
+Version 0.7+ is required. Even if you are using a binary Python install, you should still install Klampt since many of the example problems refer to the robot files in the Klampt/data folder.
+
+To install IKDB, git clone the repository as follows:
+
+   git clone https://github.com/krishauser/ikdb.git
+
+And then move or add a symbolic link to the ikdb/ikdb folder inside GlobalRedundancyResolution/grr, e.g., with
+
+   cd GlobalReduncancyResolution/grr/
+   ln -s ~/ikdb/ikdb 
+
 
 
 ## File Structure
@@ -27,7 +39,7 @@ Version 0.7+ is required.  Moreover, many of the example problems refer to the r
 The main file structure is as follows
 
 - grr/: The main Python module
-  - ikdb/: The IK Database package, used primarily just for defining rich IK problems.
+  - ikdb/: A link to the IK Database package, used primarily just for defining rich IK problems.
   - utils/: Various utilities.
   - graph.py: Defines the main RedundancyResolutionGraph data structure containing and querying a redundancy resolution.
   - solver.py: The redundancy resolution solver.
