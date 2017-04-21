@@ -1,0 +1,8 @@
+{ 
+	"orientation":"free",
+	"Nw":2000,
+	"filename":"problems/planar_robots/planar_10R.rob",
+	"eelocal":[1,0,0],
+	"domain":[[-10,0,-10],[10.5,0,10.5]],
+	"useCollision":false
+}

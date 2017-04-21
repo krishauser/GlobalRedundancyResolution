@@ -1,0 +1,10 @@
+{ 
+	"orientation":"free",
+	"Nw":4000,
+	"filename":"problems/atlas_robot/atlas.rob",
+	"useCollision":true,
+	"link":"l_hand",
+	"eelocal":[0,0.1,0],
+	"domain":[[-0.8,-0.4,-0.3],[1.0,1.2,1.4]],
+	"links":["l_clav","l_scap","l_uarm","l_larm","l_farm","l_hand"]
+}

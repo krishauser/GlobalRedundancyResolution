@@ -1,0 +1,10 @@
+{ 
+	"orientation":"free",
+	"Nw":2000,
+	"filename":"data/robots/baxter_col.rob",
+	"useCollision":true,
+	"link":"left_gripper",
+	"eelocal":[0,0,0.15],
+	"domain":[[-1,-0.8,-0.7],[1.5,1.7,1.8]],
+	"links":["left_upper_shoulder","left_lower_shoulder","left_upper_elbow","left_lower_elbow","left_upper_forearm","left_lower_forearm","left_wrist"]
+}

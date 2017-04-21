@@ -1,0 +1,10 @@
+{ 
+	"orientation":"free",
+	"Nw":8000,
+	"filename":"data/robots/robonaut2.rob",
+	"useCollision":true,
+	"link":"left_palm",
+	"eelocal":[0.07,0,0],
+	"domain":[[-0.3,-0.8,0.4],[1.4,1.0,2.0]],
+	"links":["left_shoulder_roll","left_shoulder_pitch","left_upper_arm","left_elbow","left_lower_arm","left_wrist_pitch","left_wrist_yaw"]
+}
