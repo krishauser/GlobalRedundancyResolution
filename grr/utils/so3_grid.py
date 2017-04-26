@@ -29,7 +29,7 @@ def so3_grid(N):
 						continue
 					else:
 						namemap[idx] = idx
-						flipidx = tuple([N if x == 0 else (0 if x == N else x) for x in idx])
+						flipidx = tuple([N-x for x in idx])
 						namemap[flipidx] = idx
 						q = [u,v,w]
 						q = q[:ax] + [1.0] + q[ax:]
@@ -88,7 +88,7 @@ def so3_staggered_grid(N):
 						pass
 					else:
 						namemap[idx] = idx
-						flipidx = tuple([N if x == 0 else (0 if x == N else x) for x in idx])
+						flipidx = tuple([N-x for x in idx])
 						namemap[flipidx] = idx
 						q = [u,v,w]
 						q = q[:ax] + [1.0] + q[ax:]
@@ -101,7 +101,7 @@ def so3_staggered_grid(N):
 						sidx = [i+0.5,j+0.5,k+0.5]
 						sidx = sidx[:ax] + [N] + sidx[ax:]
 						sidx = tuple(sidx)
-						sfidx = tuple([N if x == 0 else (0 if x == N else x) for x in sidx])
+						sfidx = tuple([N-x for x in sidx])
 						namemap[sidx] = sidx
 						namemap[sfidx] = sidx
 						q = [u2,v2,w2]
@@ -143,18 +143,22 @@ def so3_staggered_grid(N):
 						if nidx[n] > N:
 							#swap face
 							nidx[n] = N
-							nidx = nidx[:ax] + [0.5] + nidx[ax:]
+							nidx = nidx[:ax] + [N-0.5] + nidx[ax:]
+							nidx = tuple(nidx)
+							#if not G.has_edge(namemap[idx],namemap[nidx]):
+							#	print "Stagger-stagger edge",idx,nidx,"swap face"
 						else:
 							nidx = nidx[:ax] + [N] + nidx[ax:]
-						nidx = tuple(nidx)
-						#if not G.has_edge(namemap[idx],namemap[nidx]):
-						#	print "Stagger-stagger edge",idx,nidx
+							nidx = tuple(nidx)
+							#if not G.has_edge(namemap[idx],namemap[nidx]):
+							#	print "Stagger-stagger edge",idx,nidx
 						G.add_edge(namemap[idx],namemap[nidx])
 	return G
 
 
-def so3_grid_test(N=3,staggered=False):
+def so3_grid_test(N=5,staggered=True):
 	from klampt import vis
+	from klampt.model import trajectory
 	if staggered:
 		G = so3_staggered_grid(N)
 	else:
@@ -168,6 +172,8 @@ def so3_grid_test(N=3,staggered=False):
 		vis.add(str(n),[R,trans])
 		vis.hideLabel(str(n))
 	#draw edges?
+	minDist = float('inf')
+	maxDist = 0.0
 	for i,j in G.edges():
 		Ri = G.node[i]['params']
 		Rj = G.node[j]['params']
@@ -180,4 +186,12 @@ def so3_grid_test(N=3,staggered=False):
 			milestones.append(trans)
 		vis.add(str(i)+'-'+str(j),trajectory.Trajectory(times,milestones))
 		vis.hideLabel(str(i)+'-'+str(j))
+		dist = so3.distance(Ri,Rj)
+		if dist > maxDist:
+			maxDist = dist
+			print "Max dispersion at",i,j,":",dist
+		if dist < minDist:
+			minDist = dist
+	print "Number of points:",G.number_of_nodes()
+	print "Min/max dispersion:",minDist,maxDist
 	vis.run()
