@@ -43,7 +43,7 @@ class GLRedundancyProgram(GLWidgetPlugin):
 		self.useboundary = None
 
 	def initialize(self):
-		GLBaseClass.initialize(self)
+		GLWidgetPlugin.initialize(self)
 		self.window.program.clearColor = [1,1,1,1]
 		
 		assert self.resolution.domain != None
@@ -262,10 +262,10 @@ class GLRedundancyProgram(GLWidgetPlugin):
 			#gldraw.box(bmin[:3],bmax[:3],lighting=False,filled=False)
 
 
-		GLBaseClass.display(self)
+		GLWidgetPlugin.display(self)
 
 	def mousefunc(self,button,state,x,y):
-		GLBaseClass.mousefunc(self,button,state,x,y)
+		GLWidgetPlugin.mousefunc(self,button,state,x,y)
 		self.do_click(x,y)
 
 	def do_click(self,x,y):
@@ -301,8 +301,9 @@ class GLRedundancyProgram(GLWidgetPlugin):
 			self.refresh()
 
 	def motionfunc(self,x,y,dx,dy):
-		GLBaseClass.motionfunc(self,x,y,dx,dy)
+		res = GLWidgetPlugin.motionfunc(self,x,y,dx,dy)
 		self.do_click(x,y)
+		return res
 		
 	def keyboardfunc(self,c,x,y):
 		if c == 'h':
