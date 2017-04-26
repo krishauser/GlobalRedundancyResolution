@@ -3,7 +3,7 @@ from klampt.math import vectorops,so3,se3
 from utils.nearestneighbors import *
 from utils.metric import *
 from utils.disjointset import *
-from utils.collections import defaultdict
+from collections import defaultdict
 from ikdb.utils import mkdir_p
 from utils.csp import *
 from graph import RedundancyResolutionGraph
