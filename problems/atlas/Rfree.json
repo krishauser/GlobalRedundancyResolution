@@ -1,7 +1,7 @@
 { 
 	"orientation":"free",
 	"Nw":4000,
-	"filename":"problems/atlas_robot/atlas.rob",
+	"filename":"data/robots/atlas.rob",
 	"useCollision":true,
 	"link":"l_hand",
 	"eelocal":[0,0.1,0],
