@@ -211,6 +211,11 @@ class RedundancyResolutionGraph:
 			self.world = world_or_robot
 			self.robot = world_or_robot.robot(0)
 		self.spinJoints = False
+		for i in xrange(self.robot.numLinks()):
+ 			if self.robot.getJointType(i) == 'spin':
+ 				print "NOTE: using spin joint distance calculation for walk path timing"
+ 				self.spinJoints = True
+
 		self.domain = None
 		self.Gw = nx.Graph()
 		self.ikTemplate = IKProblem()
@@ -435,7 +440,6 @@ class RedundancyResolutionGraph:
 			n += np
 			if nr == 3 and len(x) >= 3 + n:
 				assert n + nr <= len(x)
-				R = obj.getRotation()
 				R = so3.from_moment(x[n:n+3])
 				obj.setFixedRotConstraint(R)
 				n += nr
@@ -455,7 +459,9 @@ class RedundancyResolutionGraph:
 			if np == 3:
 				local,world = obj.getPosition()
 				x += link.getWorldPosition(local)
-			#TODO: handle rotations
+ 			if nr == 3 and len(self.domain[0]) >= 6:
+ 				R = obj.getRotation()
+ 				x += so3.moment(R)
 		self.robot.setConfig(qOrig)
 		return x
 
@@ -613,7 +619,7 @@ class RedundancyResolutionGraph:
 					return False
 		return True
 
-	def validEdgeLinear(self,qa,qb,wa,wb,epsilon=1e-3):
+	def validEdgeLinear(self,qa,qb,wa,wb,epsilon=1e-2):
 		#ea = self.ikError(qb,wa)
 		#eb = self.ikError(qa,wb)
 		qprev = qa
@@ -891,10 +897,19 @@ class RedundancyResolutionGraph:
 
 	def autoSetWorkspaceRadius(self):
 		self.wRadius = 0
+ 		numSame = 0
 		for i,d in self.Gw.nodes_iter(data=True):
+			oldw = self.wRadius
 			for j in self.Gw.neighbors(i):
 				dist = workspace_distance(d['params'],self.Gw.node[j]['params'])
 				self.wRadius = max(dist,self.wRadius)
+			if self.wRadius == oldw:
+				numSame += 1
+				if numSame > 10:
+					#assume it's a regular grid
+					break
+			else:
+				numSame = 1
 		self.wRadius *= 1.01
 
 	def getResolutionGraph(self):
@@ -1193,7 +1208,7 @@ class RedundancyResolutionGraph:
 				if m == mbest:
 					subgraph.append(i)
 			print "Extracting rotation subgraph of size",len(subgraph)
-			graph = nx.subgraph(self.Gw,subgraph)
+			G = nx.subgraph(self.Gw,subgraph)
 		else:
 			assert len(bmax) <= 3,"Can't compute discontinuity boundaries for 6D workspace graph"
 
