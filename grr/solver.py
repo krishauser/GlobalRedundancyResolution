@@ -132,7 +132,7 @@ class StatCollector:
 	def setVisK(self, visK):
 		self.visK = visK
 		
-	def selfSetMotionCcsStats(self, stats):
+	def setSelfMotionCcsStats(self, stats):
 		self.sumConfigs = stats['sumConfigs']
 		self.sumNumQccs = stats['sumNumQccs']
 		self.sumMaxSize = stats['sumMaxSize']
@@ -618,23 +618,25 @@ class RedundancyResolver:
 		for i in range(wqnodes):
 			ccs.add(i)
 			Gccs.add_node(i)
+		qis = d['qlist']
+		xi = d['params']
 		if k is not None:
 			nnq = NearestNeighbors(L2Metric,'kdtree')
-			for i in range(wqnodes):
-				nnq.add(d['qlist'][i],i)
-			for i in range(wqnodes):
-				knn = nnq.knearest(d['qlist'][i],k)
+			for i,qi in enumerate(qis):
+				nnq.add(qi,i)
+			for i,qi in enumerate(qis):
+				knn = nnq.knearest(qi,k)
 				for qj,j in knn:
 					if not ccs.same(i,j):
-						if self.resolution.validEdge(qi,qj,d['params'],d['params']):
+						if self.resolution.validEdge(qi,qj,xi,xi):
 							ccs.merge(i,j)
 							Gccs.add_edge(i,j)
 		else:
 			#visibility prm with all-pairs connections 
-			for i in range(wqnodes):
+			for i,qi in enumerate(qis):
 				for j in xrange(i):
 					if not ccs.same(i,j):
-						if self.resolution.validEdge(d['qlist'][i],d['qlist'][j],d['params'],d['params']):
+						if self.resolution.validEdge(qi,qis[j],xi,xi):
 							ccs.merge(i,j)
 							Gccs.add_edge(i,j)
 
