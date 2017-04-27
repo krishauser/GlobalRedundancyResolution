@@ -1,16 +1,16 @@
 # Global Redundancy Resolution
 
 Kris Hauser, Scott Emmons
-kris.hauser@duke.edu, scott.emmons@duke.edu
+<kris.hauser@duke.edu>, <scott.emmons@duke.edu>
 Duke University
 
 A software package for computing global redundancy resolutions for redundant robots over 2D, 3D, and 6D Cartesian workspaces.  A redundancy resolution is a map from some Cartesian workspace to a robot's configuration space.  This accompanies the paper:
 
-  K. Hauser.  Continuous Pseudoinversion of a Multivariate Function: Application to Global Redundancy Resolution. Workshop on the Algorithmic Foundations of Robotics (WAFR), 2016. 
+> K. Hauser.  Continuous Pseudoinversion of a Multivariate Function: Application to Global Redundancy Resolution. Workshop on the Algorithmic Foundations of Robotics (WAFR), 2016. 
 
 More information and examples can be found at:
 
-  http://motion.pratt.duke.edu/redundancyresolution/
+> http://motion.pratt.duke.edu/redundancyresolution/
 
 
 ## Prerequisites
@@ -19,19 +19,24 @@ The main requirements are Python 2.7, the Klamp't Python API, the IKDB library, 
 
 Instructions for installing Klamp't can be found here:
 
-   http://motion.pratt.duke.edu/klampt/tutorial_install.html
+> http://motion.pratt.duke.edu/klampt/tutorial_install.html
 
 Version 0.7+ is required. Even if you are using a binary Python install, you should still install Klampt since many of the example problems refer to the robot files in the Klampt/data folder.
 
 To install IKDB, git clone the repository as follows:
 
-   git clone https://github.com/krishauser/ikdb.git
+> git clone https://github.com/krishauser/ikdb.git
 
 And then move or add a symbolic link to the ikdb/ikdb folder inside GlobalRedundancyResolution/grr, e.g., with
 
-   cd GlobalReduncancyResolution/grr/
-   ln -s ~/ikdb/ikdb 
+> cd GlobalReduncancyResolution/grr/
+> ln -s ~/ikdb/ikdb 
 
+To test whether you have correctly installed the prerequisites, in this folder run:
+
+> python redundancy.py atlas
+
+You should then see the ATLAS robot and a previously computed redundancy resolution.  (The default visualization assumes that you have installed Klamp't in the user's home directory; if this is not the case you can edit the line ``` klampt_directory = os.path.expand("~/Klampt") ``` in grr/visualization.py.)
 
 
 ## File Structure
@@ -60,15 +65,16 @@ The main file structure is as follows
 
 ## Running the main program
 
-The command line arguments for both redundancy.py and visualization.py are as follows:
+The command line arguments for both redundancy.py and grr/visualization.py are as follows:
 
-  python redundancy.py PROBLEM [JSONFILE] [OPT1=VAL1] [OPT2=VAL2] [clean]...
+> python redundancy.py PROBLEM [JSONFILE] [OPT1=VAL1] [OPT2=VAL2] [clean]...
 
 The PROBLEM variable is some folder inside the problems/ directory.  If JSONFILE is a .json file given as the second argument, then this is the name of the file inside problems/PROBLEM that defines the parameters of the problem.
 
 Any options specified on the command line override the definitions in the JSON file.  Valid options are specified below.
 
 If "clean" is specified on the command line, any previously computed resolutions are not loaded from disk.  Otherwise, if a previously computed resolution is available, it will be loaded.
+
 
 
 ## Problem JSON files
@@ -87,7 +93,7 @@ Valid items are as follows:
 - useCollision: if true, collisions are avoided.  Otherwise, self-collisions are allowed.
 - links: the links that are movable. By default this is all links of the robot.
 - Nq: the number of configurations per workspace node, used for parallel computation.
-- output: the output folder name (default is of the form output/[PROBLEM]/[JSONFILE (without extension)]_W[Nw])
+- output: the output folder name (default is of the form ```output/[PROBLEM]/[JSONFILE (without extension)]_W[Nw]```)
 - output_prefix: prepends a custom prefix to the output folder.
 
 When setting up the domain and other parameters, it is useful to launch one of the visualization files and then type 'g'.  This will display the workspace graph.  It is also useful to drag around the end effector widget to see whether the IK problem is being solved correctly.
@@ -95,11 +101,11 @@ When setting up the domain and other parameters, it is useful to launch one of t
 
 ## Solver GUI commands
 
-The solver builds a roadmap linking a workspace grid and random samples in configuration space.  The accuracy of the redundancy resolution solve is determined primarily by the number of workspace nodes Nw and number of configurations sampled per node Nq.  We implement three solvers, of which the first and third are the most useful.
+The solver builds a roadmap linking a workspace grid and random samples in configuration space.  The accuracy of the redundancy resolution solve is determined primarily by the number of workspace nodes N<sub>w</sub> and number of configurations sampled per node N<sub>q</sub>.  We implement three solvers, of which the first and third are the most useful.
 
 ### Basic solver
 
-The basic solver was defined in the WAFR paper above and simply builds the roadmap connecting all neighboring pairs of configurations.  Its running time is O(DNwNq^2) where D is the degree of the workspace graph.  However, it can be run in an incremental manner in which a solve with low Nq can be inspected, and then augmented with more samples if desired.
+The basic solver was defined in the WAFR paper above and simply builds the roadmap connecting all neighboring pairs of configurations.  Its running time is O(DN<sub>w</sub>N<sub>q</sub><sup>2</sup>) where D is the degree of the workspace graph.  However, it can be run in an incremental manner in which a solve with low N<sub>q</sub> can be inspected, and then augmented with more samples if desired.
 
 To interact with the solver in the GUI, type these commands:
 
@@ -111,7 +117,7 @@ To interact with the solver in the GUI, type these commands:
 
 ### Visibility graph solver
 
-The visibility graph solver uses the notion of a self-motion manifold to reduce the practical impact of the Nq^2 factor to Nq.  In typical cases where the self-motion manifolds are highly connected, the running time can be as low as O(NwNq+DNw).  However, this solver does not always achieve this best-case scenario, and is not incremental.  In other words, it uses a fixed sampling Nq and cannot be inspected and revised.  It is recommended to set Nq to 100 or more for this solver.
+The visibility graph solver uses the notion of a self-motion manifold to reduce the practical impact of the N<sub>q</sub><sup>2</sup> factor to N<sub>q</sub>.  In typical cases where the self-motion manifolds are highly connected, the running time can be as low as O(N<sub>w</sub>N<sub>q</sub>+DN<sub>w</sub>).  However, this solver does not always achieve this best-case scenario, and is not incremental.  In other words, it uses a fixed sampling N<sub>q</sub> and cannot be inspected and revised.  It is recommended to set N<sub>q</sub> to 100 or more for this solver.
 
 This solver also uses a more complex resolution technique that is more expensive and less customizable than the basic solver.
 
@@ -155,3 +161,5 @@ Keyboard commands:
 ## Using resolutions in external projects
 
 Once a resolution is solved, you may use the RedundancyGraph object for use in your own external project. You will need to copy the problem settings JSON file and "resolution_graph.pickle" file found in the appropriate output directory to whereever you need it.  You may also find the parse_args() and make_program() functions in grr/visualization.py to be useful for setting up the appropriate IK problem.
+
+
