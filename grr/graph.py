@@ -480,12 +480,17 @@ class RedundancyResolutionGraph:
 		self.robot.setConfig(qOrig)
 		return x
 
-	def solve(self,qinit,x):
+	def solve(self,qinit,x,testfeasibility=True):
 		"""Solves the IK problem at x with the starting config qinit.  Returns None if
 		failed, or the solution if successful."""
 		self.setIKProblem(x)
 		self.robot.setConfig(qinit)
 		self.ikSolverParams.startRandom = False
+		if not testfeasibility:
+			f,self.ikTemplate.feasibilityTest = self.ikTemplate.feasibilityTest,None
+			res = self.ikTemplate.solve(self.robot,self.ikSolverParams)
+			self.ikTemplate.feasibilityTest = f
+			return res
 		return self.ikTemplate.solve(self.robot,self.ikSolverParams)
 
 	def addWorkspaceNode(self,x):
@@ -634,7 +639,7 @@ class RedundancyResolutionGraph:
 					return False
 		return True
 
-	def validEdgeLinear(self,qa,qb,wa,wb,epsilon=1e-3):
+	def validEdgeLinear(self,qa,qb,wa,wb,epsilon=1e-2):
 		#ea = self.ikError(qb,wa)
 		#eb = self.ikError(qa,wb)
 		qprev = qa
@@ -659,7 +664,7 @@ class RedundancyResolutionGraph:
 			im = (ia+ib)/2
 			u = float(im)/(Ndivs+1)
 			x = self.robot.interpolate(qa,qb,u)
-			qm = self.solve(x,workspace_interpolate(wa,wb,u))
+			qm = self.solve(x,workspace_interpolate(wa,wb,u),testfeasibility=False)
 			if qm == None:
 				#print "Unable to solve",x
 				return False
@@ -681,7 +686,7 @@ class RedundancyResolutionGraph:
 		for i in range(Ndivs):
 			u = float(i+1)/(Ndivs+1)
 			x = self.robot.interpolate(qa,qb,u)
-			q = self.solve(x,workspace_interpolate(wa,wb,u))
+			q = self.solve(x,workspace_interpolate(wa,wb,u),testfeasibility=False)
 			if q == None:
 				#print "Unable to solve",x
 				return False
@@ -707,7 +712,7 @@ class RedundancyResolutionGraph:
 
 	def interpolateEdgeLinear(self,qa,qb,wa,wb,u):
 		x = self.robot.interpolate(qa,qb,u)
-		q = self.solve(x,workspace_interpolate(wa,wb,u))
+		q = self.solve(x,workspace_interpolate(wa,wb,u),testfeasibility=False)
 		if q is None:
 			return self.robot.interpolate(qa,qb,u)
 		return q
@@ -736,7 +741,7 @@ class RedundancyResolutionGraph:
 			return self.robot.interpolate(qa,qb,u)
 		wm = workspace_interpolate(wa,wb,0.5)
 		qm = self.robot.interpolate(qa,qb,0.5)
-		q = self.solve(qm,wm)
+		q = self.solve(qm,wm,testfeasibility=False)
 		if q is None:
 			return self.robot.interpolate(qa,qb,u)
 		d1 = self.robot.distance(qa,q)
