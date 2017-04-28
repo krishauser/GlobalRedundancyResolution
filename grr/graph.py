@@ -348,6 +348,14 @@ class RedundancyResolutionGraph:
 				bmin[j] = min(bmin[j],v)
 				bmax[j] = max(bmax[j],v)
 		self.domain = (bmin,bmax)
+		numPotentialEdges = 0
+		numResolvedEdges = 0
+		for i,j in self.Gw.edges_iter():
+			if self.isResolvedNode(i) and self.isResolvedNode(j):
+				numPotentialEdges += 1
+				if self.isResolvedEdge(i,j):
+					numResolvedEdges += 1
+		print "Loaded problem with",self.resolvedCount,"/",self.Gw.number_of_nodes(),"resolved workspace nodes and",numResolvedEdges,"/",numPotentialEdges,"resolved edges"
 		self.buildNearestNeighbors()
 
 	def buildNearestNeighbors(self):
@@ -384,13 +392,20 @@ class RedundancyResolutionGraph:
 
 	def verify(self):
 		numInvalid = 0
+		numValid = 0
 		for iw,jw in self.Gw.edges():
 			if self.isResolvedEdge(iw,jw):
 				if not self.validEdge(self.Gw.node[iw]['config'],self.Gw.node[jw]['config'],self.Gw.node[iw]['params'],self.Gw.node[jw]['params']):
 					print "Warning, edge",iw,jw,"is marked as connected, but it is actually not valid"
 					numInvalid += 1
 					del self.Gw.edge[iw][jw]['connected']
-		print "Verification found",numInvalid,"/",self.Gw.number_of_edges()+numInvalid,"edges infeasible"
+			elif self.isResolvedNode(iw) and self.isResolvedNode(jw):
+				if self.validEdge(self.Gw.node[iw]['config'],self.Gw.node[jw]['config'],self.Gw.node[iw]['params'],self.Gw.node[jw]['params']):
+					print "Warning, edge",iw,jw,"is marked as disconnected, but it is actually valid!"
+					self.markConnected(iw,jw)
+					numValid += 1
+		print "Verification found",numInvalid,"/",self.Gw.number_of_edges()+numInvalid,"edges infeasible and",numValid,"edges feasible"
+
 
 	def clear(self):
 		"""Reinitializes workspace graph."""
@@ -619,7 +634,7 @@ class RedundancyResolutionGraph:
 					return False
 		return True
 
-	def validEdgeLinear(self,qa,qb,wa,wb,epsilon=1e-2):
+	def validEdgeLinear(self,qa,qb,wa,wb,epsilon=1e-3):
 		#ea = self.ikError(qb,wa)
 		#eb = self.ikError(qa,wb)
 		qprev = qa
@@ -628,7 +643,7 @@ class RedundancyResolutionGraph:
 		nlinks = (self.robot.numLinks() if self.ikTemplate.activeDofs is None else len(self.ikTemplate.activeDofs))
 		epsilon *= nlinks
 		Ndivs = int(math.ceil(self.robot.distance(qa,qb)/epsilon))
-		discontinuityThreshold = epsilon*10
+		discontinuityThreshold = min(epsilon*10,0.2)
 
 		#this does a bisection technique and should be faster for infeasible edges
 		queue = deque()
@@ -1164,6 +1179,40 @@ class RedundancyResolutionGraph:
 					break
 		return xpath,qpath
 
+
+	def closestOrientation(self,orientation):
+		"""For 6D variable-rotation graphs, extracts the moment representation of the orientation
+		in the graph closest to orientation."""
+		if not hasattr(self,'allMoments'):
+			self.allMoments = dict()
+			for i,d in self.Gw.nodes(data=True):
+				m = d['params'][3:]
+				m = tuple([round(v,4) for v in m])
+				if m not in self.allMoments:
+					self.allMoments[m] = []
+				self.allMoments[m].append(i)
+			assert len(self.allMoments) * 10 < self.Gw.number_of_nodes(),"Is this a random 6D workspace graph?"
+		mbest = None
+		dbest = float('inf')
+		for m in self.allMoments:
+			R = so3.from_moment(m)
+			dist = so3.distance(orientation,R) 
+			if dist < dbest:
+				dbest = dist
+				mbest = m
+		return mbest
+
+	def extractOrientedSubgraph(self,orientation):
+		"""For 6D variable-rotation graphs, extracts the 3D subgraph most closely matched to 
+		the given orientation.  The result is (Rclosest,G) where Rclosest is the closest orientation
+		found and G is the 3D subgraph."""
+		#find the closest orientation in the graph
+		mbest = self.closestOrientation(orientation)
+		subgraph = self.allMoments[mbest]
+		print "Extracting rotation subgraph of size",len(subgraph)
+		G = nx.subgraph(self.Gw,subgraph)
+		return (so3.from_moment(mbest),G)
+
 	def computeDiscontinuities(self,useboundary=False,orientation=None):
 		"""Computes a 2D segment mesh or 3D triangulated mesh illustrating the discontinuities
 		in the resolution.
@@ -1184,31 +1233,9 @@ class RedundancyResolutionGraph:
 		bmin,bmax = self.domain
 		active = [i for i,(a,b) in enumerate(zip(bmin,bmax)[:3]) if b!=a]
 		G = self.Gw
-		if orientation is not None: print "Extracting for orientation",orientation
 		if orientation != None:
-			#find the closest orientation in the graph
-			mbest = None
-			dbest = float('inf')
-			nnodes = 0
-			for i,d in self.Gw.nodes(data=True):
-				m = d['params'][3:]
-				R = so3.from_moment(m)
-				dist = so3.distance(orientation,R) 
-				if dist < dbest:
-					dbest = dist
-					mbest = m
-					nnodes = 1
-				elif dist == dbest:
-					nnodes += 1
-			assert nnodes > 1,"Only 1 node is closest to the target orientation... is this a random 6D workspace graph?"
-			#extract out the subgraph corresponding to those nodes matching the target orientation
-			subgraph = []
-			for i,d in self.Gw.nodes(data=True):
-				m = d['params'][3:]
-				if m == mbest:
-					subgraph.append(i)
-			print "Extracting rotation subgraph of size",len(subgraph)
-			G = nx.subgraph(self.Gw,subgraph)
+			print "Extracting for orientation",orientation
+			Rclosest,G = self.extractOrientedSubgraph(orientation)
 		else:
 			assert len(bmax) <= 3,"Can't compute discontinuity boundaries for 6D workspace graph"
 
