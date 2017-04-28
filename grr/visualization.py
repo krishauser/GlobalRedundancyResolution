@@ -50,7 +50,11 @@ class GLRedundancyProgram(GLWidgetPlugin):
 		print "Domain",self.resolution.domain
 		if len(self.resolution.domain[0]) == 6:
 			#if a 2D problem and want to show depth, turn this to true
-			self.rotationAsDepth = True
+			active = [i for i,(a,b) in enumerate(zip(*self.resolution.domain)[:3]) if b!=a]
+			if len(active) <= 2:
+				self.rotationAsDepth = True
+			else:
+				self.rotationAsDepth = False
 			link = self.resolution.ikTemplate.objectives[0].link()
 			self.xformWidget.enableTranslation(True)
 			self.xformWidget.enableRotation(True)
@@ -123,30 +127,34 @@ class GLRedundancyProgram(GLWidgetPlugin):
 
 		#draw workspace graph
 		if self.drawWorkspaceRoadmap:
-			def drawWorkspaceRoadmap():
+			def drawWorkspaceRoadmap(orientation=None):
+				G = self.resolution.Gw
+				if orientation is not None:
+					Rclosest,G = self.resolution.extractOrientedSubgraph(orientation)
+					print G.number_of_nodes()
 				if not self.resolution.hasResolution():
 					glDisable(GL_LIGHTING)
 					glPointSize(5.0)
 					glColor3f(1,0,0)
 					glBegin(GL_POINTS)
-					for n,d in self.resolution.Gw.nodes_iter(data=True):
+					for n,d in G.nodes_iter(data=True):
 						glVertex3fv(self.workspaceToPoint(d['params']))
 					glEnd()
 					glColor3f(1,0.5,0)
 					glBegin(GL_LINES)
-					for (i,j) in self.resolution.Gw.edges_iter():
-						glVertex3fv(self.workspaceToPoint(self.resolution.Gw.node[i]['params']))
-						glVertex3fv(self.workspaceToPoint(self.resolution.Gw.node[j]['params']))
+					for (i,j) in G.edges_iter():
+						glVertex3fv(self.workspaceToPoint(G.node[i]['params']))
+						glVertex3fv(self.workspaceToPoint(G.node[j]['params']))
 					glEnd()
 				else:
-					#maxn = max(len(d['qlist']) for n,d in self.resolution.Gw.nodes_iter(data=True))
-					#maxe = max(len(d['qlist']) for i,j,d in self.resolution.Gw.edges_iter(data=True))
+					#maxn = max(len(d['qlist']) for n,d in G.nodes_iter(data=True))
+					#maxe = max(len(d['qlist']) for i,j,d in G.edges_iter(data=True))
 					#maxn = max(maxn,1)
 					#maxe = max(maxe,1)
 					glDisable(GL_LIGHTING)
 					glPointSize(5.0)
 					glBegin(GL_POINTS)
-					for n,d in self.resolution.Gw.nodes_iter(data=True):
+					for n,d in G.nodes_iter(data=True):
 						if not self.resolution.isResolvedNode(n):
 							continue
 						#u = float(len(d['qlist']))/float(maxn)
@@ -159,7 +167,7 @@ class GLRedundancyProgram(GLWidgetPlugin):
 						glVertex3fv(self.workspaceToPoint(d['params']))
 					glEnd()
 					glBegin(GL_LINES)
-					for (i,j,d) in self.resolution.Gw.edges_iter(data=True):
+					for (i,j,d) in G.edges_iter(data=True):
 						if not self.resolution.isResolvedNode(i) or not self.resolution.isResolvedNode(j):
 							continue
 						#nsubset = sum(1 for (ia,ib) in d['qlist'] if (ia in self.Qsubgraph and ib in self.Qsubgraph))
@@ -168,8 +176,8 @@ class GLRedundancyProgram(GLWidgetPlugin):
 						if not self.resolution.isResolvedEdge(i,j):
 							r,g,b = 1,0,1
 						else:
-							qd = self.robot.distance(self.resolution.Gw.node[i]['config'],self.resolution.Gw.node[j]['config'])
-							wd = workspace_distance(self.resolution.Gw.node[i]['params'],self.resolution.Gw.node[j]['params'])
+							qd = self.robot.distance(G.node[i]['config'],G.node[j]['config'])
+							wd = workspace_distance(G.node[i]['params'],G.node[j]['params'])
 							u = 1.0 - math.exp(-max(0.0,2.0*qd/wd-1.0))
 							if u > 0.8:
 								r,g,b = 1,1.0-u*5.0,0.0
@@ -177,8 +185,8 @@ class GLRedundancyProgram(GLWidgetPlugin):
 								r,g,b = u/0.8,1,0.0
 						#assert (nsubset >=1) == self.resolution.isResolvedEdge(i,j),"Mismatch between Qsubgraph and resolution?"
 						glColor3f(r,g,b)
-						glVertex3fv(self.workspaceToPoint(self.resolution.Gw.node[i]['params']))
-						glVertex3fv(self.workspaceToPoint(self.resolution.Gw.node[j]['params']))
+						glVertex3fv(self.workspaceToPoint(G.node[i]['params']))
+						glVertex3fv(self.workspaceToPoint(G.node[j]['params']))
 					glEnd()
 					"""
 					glEnable(GL_LIGHTING)
@@ -192,8 +200,27 @@ class GLRedundancyProgram(GLWidgetPlugin):
 					self.robot.setConfig(q0)
 					glDisable(GL_LIGHTING)
 					"""
-			#self.roadmapDisplayList.draw(drawWorkspaceRoadmap)
-			drawWorkspaceRoadmap()
+			if len(self.resolution.domain[0]) == 6:
+				if not hasattr(self,'roadmapDisplayLists_by_orientation'):
+					self.roadmapDisplayLists_by_orientation = dict()
+					self.lastROrientation = None
+					self.lastRMbest = None
+					
+				orientation = self.xformWidget.get()[0]
+				if orientation != self.lastROrientation:
+					mbest = self.resolution.closestOrientation(orientation)
+					self.lastRMbest = mbest
+				else:
+					mbest = self.lastRMbest
+				if mbest not in self.roadmapDisplayLists_by_orientation:
+					print "Drawing new display list for moment",mbest
+					self.roadmapDisplayLists_by_orientation[mbest] = CachedGLObject()
+				orientation = so3.from_moment(mbest)
+				self.roadmapDisplayLists_by_orientation[mbest].draw(drawWorkspaceRoadmap,args=(orientation,))
+			else:
+				#there looks to be a bug in GL display lists for drawing lines...
+				#self.roadmapDisplayList.draw(drawWorkspaceRoadmap)
+				drawWorkspaceRoadmap()
 		else:
 			#render boundaries only
 			def drawDisconnections(orientation=None):
@@ -207,6 +234,7 @@ class GLRedundancyProgram(GLWidgetPlugin):
 					glEnable(GL_LIGHTING)
 					glEnable(GL_BLEND)
 					glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA)
+					glDisable(GL_CULL_FACE)
 					#if self.walk_workspace_path != None:
 					#	gldraw.setcolor(1,0,1,0.25)
 					#else:
@@ -221,6 +249,7 @@ class GLRedundancyProgram(GLWidgetPlugin):
 						else:
 							gldraw.setcolor(params[0],params[1],params[2],1.0)
 						gldraw.triangle(*tverts)
+					glEnable(GL_CULL_FACE)
 				else:
 					glDisable(GL_LIGHTING)
 					glEnable(GL_BLEND)
@@ -249,18 +278,32 @@ class GLRedundancyProgram(GLWidgetPlugin):
 				glVertex3fv(self.workspaceToPoint(self.resolution.Gw.node[j]['params']))
 			glEnd()
 			"""
-			orientation = None
 			if len(self.resolution.domain[0]) == 6:
+				if not hasattr(self,'disconnectionDisplayLists_by_orientation'):
+					self.disconnectionDisplayLists_by_orientation = dict()
+					self.lastOrientation = None
+					self.lastMbest = None
+					
 				orientation = self.xformWidget.get()[0]
-			self.disconnectionDisplayList.draw(drawDisconnections,args=(orientation,))
+				if orientation != self.lastOrientation:
+					mbest = self.resolution.closestOrientation(orientation)
+					self.lastMbest = mbest
+				else:
+					mbest = self.lastMbest
+				if mbest not in self.disconnectionDisplayLists_by_orientation:
+					print "Drawing new display list for moment",mbest
+					self.disconnectionDisplayLists_by_orientation[mbest] = CachedGLObject()
+				orientation = so3.from_moment(mbest)
+				self.disconnectionDisplayLists_by_orientation[mbest].draw(drawDisconnections,args=(orientation,))
+			else:
+				self.disconnectionDisplayList.draw(drawDisconnections)
 
 			bmin,bmax = self.resolution.domain
 
 			#draw workspace bound
-			#glDisable(GL_LIGHTING)
-			#glColor3f(1,0.5,0)
-			#gldraw.box(bmin[:3],bmax[:3],lighting=False,filled=False)
-
+			glDisable(GL_LIGHTING)
+			glColor3f(1,0.5,0)
+			gldraw.box(bmin[:3],bmax[:3],lighting=False,filled=False)
 
 		GLWidgetPlugin.display(self)
 
@@ -283,7 +326,8 @@ class GLRedundancyProgram(GLWidgetPlugin):
 				else:
 					self.configs = self.resolution.interpolate(x,multi=True)
 			else:
-				self.configs = self.rr.select(x,0.05,0.02)
+				self.resolution.interpolate(x,multi=True)
+				self.configs = self.resolution.lastqs
 			self.refresh()
 		if self.xformWidget.hasFocus():
 			R,t = self.xformWidget.get()
@@ -297,9 +341,10 @@ class GLRedundancyProgram(GLWidgetPlugin):
 				else:
 					self.configs = self.resolution.interpolate(x,multi=True)
 			else:
-				self.configs = self.rr.select(x,0.05,0.02)
+				self.resolution.interpolate(x,multi=True)
+				self.configs = self.resolution.lastqs
 			self.refresh()
-
+			
 	def motionfunc(self,x,y,dx,dy):
 		res = GLWidgetPlugin.motionfunc(self,x,y,dx,dy)
 		self.do_click(x,y)
