@@ -1457,82 +1457,65 @@ class RedundancyResolver:
 				stepcount += len(self.Gw.neighbors(iw))
 			c = ProgressUpdater(stepcount,1)
 			if parallel:
+				validValues = defaultdict(list)
 				launched = 0
-				validValues = {}
-				for iw,imanifold in failureManifolds.iteritems():
+				for iw,imanifold in failureManifolds.items() + neighborHubs.items():
 					for jw in self.Gw.neighbors(iw):
 						c.update()
+						jvals = None
 						if jw in failureWNodes:
-							for iq in imanifold:
-								for jq in failureManifolds[jw]:
-									numTestedEdges += 1
-									tasks.put(('test',iw,iq,self.Gw.node[iw]['qlist'][iq],self.Gw.node[iw]['params'],jw,jq,self.Gw.node[jw]['qlist'][jq],self.Gw.node[jw]['params']))
-									if launched < threads:
-										launched += 1
-										continue
-									else:
-										res = results.get()
-										if res[0] == True:
-											self.addEdge(res[1],res[2],res[3],res[4])
-											try:
-												validValues[(res[1],res[3])].append((res[2],res[4]))
-											except KeyError:
-												validValues[(res[1],res[3])] = [(res[2],res[4])]
-											numValidEdges += 1
+							jvals = failureManifolds[jw]
 						elif jw in neighborHubs:
-							for iq in imanifold:
-								for jq in neighborHubs[jw]:
-									numTestedEdges += 1
-									tasks.put(('test',iw,iq,self.Gw.node[iw]['qlist'][iq],self.Gw.node[iw]['params'],jw,jq,self.Gw.node[jw]['qlist'][jq],self.Gw.node[jw]['params']))
-									if launched < threads:
-										launched += 1
-										continue
-									else:
-										res = results.get()
-										if res[0] == True:
-											self.addEdge(res[1],res[2],res[3],res[4])
-											try:
-												validValues[(res[1],res[3])].append((res[2],res[4]))
-											except KeyError:
-												validValues[(res[1],res[3])] = [(res[2],res[4])]
-											numValidEdges += 1
+							jvals = neighborHubs[jw]
+						else:
+							continue
+						for iq in imanifold:
+							for jq in jvals:
+								numTestedEdges += 1
+								tasks.put(('test',iw,iq,self.Gw.node[iw]['qlist'][iq],self.Gw.node[iw]['params'],jw,jq,self.Gw.node[jw]['qlist'][jq],self.Gw.node[jw]['params']))
+								if launched < threads:
+									launched += 1
+									continue
+								else:
+									res = results.get()
+									valid,iw2,iq2,jw2,jq2 = res
+									if valid == True:
+										self.addEdge(iw2,iq2,jw2,jq2)
+										validValues[(iw2,jw2)].append((iq2,jq2))
+										numValidEdges += 1
 				for i in range(threads):
 					res = results.get()
-					if res[0] == True:
-						self.addEdge(res[1],res[2],res[3],res[4])
-						try:
-							validValues[(res[1],res[3])].append((res[2],res[4]))
-						except KeyError:
-							validValues[(res[1],res[3])] = [(res[2],res[4])]
+					valid,iw2,iq2,jw2,jq2 = res
+					if valid == True:
+						self.addEdge(iw2,iq2,jw2,jq2)
+						validValues[(iw2,jw2)].append((iq2,jq2))
 						numValidEdges += 1
 				for key, values in validValues.iteritems():
 					iw, jw = key
-					if jw in failureWNodes:
-						csp.addConstraint(values,("q_"+str(iw),"q_"+str(jw)))
-					elif jw in neighborHubs:
-						csp.addConstraint(values,("q_"+str(iw),"qhub_"+str(jw)))
+					iname = "q_"+str(iw) if iw in failureWNodes else 'qhub_'+str(iw)
+					jname = "q_"+str(jw) if jw in failureWNodes else 'qhub_'+str(jw)
+					csp.addConstraint(values,(iname,jname))
 			else:
-				for iw,imanifold in failureManifolds.iteritems():
+				for iw,imanifold in failureManifolds.items() + neighborHubs.items():
 					for jw in self.Gw.neighbors(iw):
 						c.update()
+						jvals = None
 						if jw in failureWNodes:
-							validValues = []
-							for iq in imanifold:
-								for jq in failureManifolds[jw]:
-									numTestedEdges += 1
-									if self.testAndConnect(iw,iq,jw,jq):
-										validValues.append((iq,jq))
-										numValidEdges += 1
-							csp.addConstraint(validValues,("q_"+str(iw),"q_"+str(jw)))
+							jvals = failureManifolds[jw]
 						elif jw in neighborHubs:
-							validValues = []
-							for iq in imanifold:
-								for jq in neighborHubs[jw]:
-									numTestedEdges += 1
-									if self.testAndConnect(iw,iq,jw,jq):
-										validValues.append((iq,jq))
-										numValidEdges += 1
-							csp.addConstraint(validValues,("q_"+str(iw),"qhub_"+str(jw)))
+							jvals = neighborHubs[jw]
+						else:
+							continue
+						validValues = []
+						for iq in imanifold:
+							for jq in jvals:
+								numTestedEdges += 1
+								if self.testAndConnect(iw,iq,jw,jq):
+									validValues.append((iq,jq))
+									numValidEdges += 1
+						iname = "q_"+str(iw) if iw in failureWNodes else 'qhub_'+str(iw)
+						jname = "q_"+str(jw) if jw in failureWNodes else 'qhub_'+str(jw)
+						csp.addConstraint(validValues,(iname,jname))
 			c.done()
 			print "# of valid edges",numValidEdges,"# total",numTestedEdges
 			#raw_input("Press enter to begin CSP assignment")
@@ -1554,6 +1537,7 @@ class RedundancyResolver:
 							neighborsinconflict.append(int(vname[5:]))
 						else:
 							failuresinconflict.append(int(vname[2:]))
+			print neighborHubs.keys()
 			print "# of centers in conflict",len(failuresinconflict)
 			print "# of neighbors in conflict",len(neighborsinconflict)
 			for v,vname in enumerate(csp.variables):
@@ -1991,9 +1975,10 @@ class RedundancyResolver:
 		self.resolution.clearResolution()
 		for iw,iq in self.Qsubgraph.iteritems():
 			self.resolution.setConfig(iw, self.Gw.node[iw]['qlist'][iq])
+		for iw,iq in self.Qsubgraph.iteritems():
 			for jw in self.Gw.neighbors(iw):
 				if jw > iw: continue
-				if self.resolution.isResolvedNode(jw) and self.hasEdge(iw,iq,jw,self.Qsubgraph[jw]):
+				if jw in self.Qsubgraph and self.hasEdge(iw,iq,jw,self.Qsubgraph[jw]):
 					self.resolution.markConnected(iw,jw)
 		#self.sanityCheck()
 
