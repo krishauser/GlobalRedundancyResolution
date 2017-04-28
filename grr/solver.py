@@ -607,7 +607,7 @@ class RedundancyResolver:
 			stats['avgAvgSize'] = float(sumAvgSize)/float(configuredW)
 			stats['avgMinSize'] = float(sumMinSize)/float(configuredW)
 		return stats
-		
+
 	def constructSelfMotionManifold(self,iw,k=None):
 		"""Constructs self motion manifold for a single workspace node"""
 		d = self.Gw.node[iw]
@@ -634,11 +634,14 @@ class RedundancyResolver:
 		else:
 			#visibility prm with all-pairs connections 
 			for i,qi in enumerate(qis):
+				distances = []
 				for j in xrange(i):
 					if not ccs.same(i,j):
-						if self.resolution.validEdge(qi,qis[j],xi,xi):
-							ccs.merge(i,j)
-							Gccs.add_edge(i,j)
+						distances.append((self.robot.distance(qi,qis[j]),j))
+				for d,j in sorted(distances):
+					if self.resolution.validEdge(qi,qis[j],xi,xi):
+						ccs.merge(i,j)
+						Gccs.add_edge(i,j)
 
 		#now create 'qccs' and 'qcc_parents'
 		components = dict()
@@ -898,6 +901,17 @@ class RedundancyResolver:
 							Gccs.add_edge(iq,jq)
 		elif selfmotion:
 			#visibility prm with all-pairs connections 
+			for i,qi in enumerate(configs):
+				distances = []
+				for j in xrange(i):
+					if not ccs.same(i,j):
+						distances.append((self.robot.distance(qi,configs[j]),j))
+				for dist,j in sorted(distances):
+					if not ccs.same(i,j):
+						if self.resolution.validEdge(qi,configs[j],params,params):
+							ccs.merge(i,j)
+							Gccs.add_edge(i,j)
+			"""
 			for iq in range(wqnodes):
 				for jq in xrange(iq):
 					if not ccs.same(iq,jq):
@@ -905,7 +919,7 @@ class RedundancyResolver:
 							#keep track of qedges?
 							ccs.merge(iq,jq)
 							Gccs.add_edge(iq,jq)
-							
+			"""			
 		components = dict()
 		for rep in ccs.getReps():
 			components[rep] = [v for v in ccs.getSetRef(rep)]
