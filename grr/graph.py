@@ -641,9 +641,9 @@ class RedundancyResolutionGraph:
 		#TODO determine a suitable lipschitz constant for singularity avoidance
 		#right now this assumes that each DOF contributes about 1 unit to the lipschitz constant
 		nlinks = (self.robot.numLinks() if self.ikTemplate.activeDofs is None else len(self.ikTemplate.activeDofs))
-		epsilon *= nlinks
+		epsilon *= math.sqrt(nlinks)
 		Ndivs = int(math.ceil(self.robot.distance(qa,qb)/epsilon))
-		discontinuityThreshold = min(epsilon*10,0.2)
+		discontinuityThreshold = epsilon*10
 
 		#this does a bisection technique and should be faster for infeasible edges
 		queue = deque()
