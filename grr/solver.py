@@ -638,10 +638,11 @@ class RedundancyResolver:
 				for j in xrange(i):
 					if not ccs.same(i,j):
 						distances.append((self.robot.distance(qi,qis[j]),j))
-				for d,j in sorted(distances):
-					if self.resolution.validEdge(qi,qis[j],xi,xi):
-						ccs.merge(i,j)
-						Gccs.add_edge(i,j)
+				for dists,j in sorted(distances):
+					if not ccs.same(i,j):
+						if self.resolution.validEdge(qi,qis[j],xi,xi):
+							ccs.merge(i,j)
+							Gccs.add_edge(i,j)
 
 		#now create 'qccs' and 'qcc_parents'
 		components = dict()
