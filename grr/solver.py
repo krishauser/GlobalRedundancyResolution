@@ -20,7 +20,6 @@ import json
 
 
 
-
 def nearest_point(G,nodes,weight=None,p=1):
 	"""Finds the node closest to the given nodes on the graph, where the
 	node-node distances are combined using an L_p metric.  If no node is
@@ -267,13 +266,16 @@ class RedundancyResolver:
 		for i,d in self.resolution.Gw.nodes_iter(data=True):
 			self.Gw.add_node(i,params=d['params'],qlist=[])
 		for i,j,d in self.resolution.Gw.edges_iter(data=True):
-			self.Gw.add_edge(i,j,qlist=[])
+			self.Gw.add_edge(i,j,qlist=set())
 		if clear:
 			self.resolution.clearResolution()
 
 	def save(self,folder,close=False):
 		mkdir_p(folder)
-		self.Gw.save(os.path.join(folder,"Gw_cached.pickle"),close=close)
+		if self.cachesize == 0:
+			nx.write_gpickle(self.Gw,os.path.join(folder,"Gw_cached.pickle"))
+		else:
+			self.Gw.save(os.path.join(folder,"Gw_cached.pickle"),close=close)
 		self.resolution.save(folder)
 		if len(self.Qsubgraph) > 0:
 			f = open(os.path.join(folder,"Qsubgraph_cached.txt"),"w")
@@ -289,7 +291,10 @@ class RedundancyResolver:
 
 	def load(self,folder):
 		try:
-			self.Gw.load(os.path.join(folder,"Gw_cached.pickle"))
+			if self.cachesize == 0:
+				nx.read_gpickle(os.path.join(folder,"Gw_cached.pickle"))
+			else:
+				self.Gw.load(os.path.join(folder,"Gw_cached.pickle"))
 		except:
 			self.resolution.load(folder)
 			#TODO: decide whether we want to import the resolution into the graph
@@ -297,7 +302,7 @@ class RedundancyResolver:
 			for i,d in self.resolution.Gw.nodes_iter(data=True):
 				d['qlist'] = []
 			for i,j,d in self.resolution.Gw.edges_iter(data=True):
-				d['qlist'] = []
+				d['qlist'] = set()
 			return
 		self.resolution.load(folder)
 		print "Loaded",self.numConfigurations(),"configs for",self.Gw.number_of_nodes(),'workspace nodes'
@@ -443,7 +448,7 @@ class RedundancyResolver:
 		assert iq < len(self.Gw.node[iw]['qlist'])
 		assert jq < len(self.Gw.node[jw]['qlist'])
 		assert iw != jw,"Can't handle self-motion manifold edges in addEdge"
-		self.Gw.edge[iw][jw]['qlist'].append((iq,jq))
+		self.Gw.edge[iw][jw]['qlist'].add((iq,jq))
 	
 	def hasEdge(self,iw,iq,jw,jq):
 		if iw > jw:
@@ -607,7 +612,7 @@ class RedundancyResolver:
 			stats['avgAvgSize'] = float(sumAvgSize)/float(configuredW)
 			stats['avgMinSize'] = float(sumMinSize)/float(configuredW)
 		return stats
-
+		
 	def constructSelfMotionManifold(self,iw,k=None):
 		"""Constructs self motion manifold for a single workspace node"""
 		d = self.Gw.node[iw]
@@ -638,7 +643,7 @@ class RedundancyResolver:
 				for j in xrange(i):
 					if not ccs.same(i,j):
 						distances.append((self.robot.distance(qi,qis[j]),j))
-				for dists,j in sorted(distances):
+				for dist,j in sorted(distances):
 					if not ccs.same(i,j):
 						if self.resolution.validEdge(qi,qis[j],xi,xi):
 							ccs.merge(i,j)
@@ -655,6 +660,7 @@ class RedundancyResolver:
 			parentList[e[1]]=e[0]
 		d['qcc_parents'] = parentList
 		return len(d['qccs'])
+
 		
 	def constructSelfMotionManifolds(self,k=None):
 		"""Create self-motion C-space edges to minimize number of C-space connected
@@ -820,7 +826,7 @@ class RedundancyResolver:
 					else:
 						#print "Same config"
 						pass
-
+			
 			if visibility:
 				self.constructSelfMotionManifold(i,k)
 			
@@ -1277,7 +1283,7 @@ class RedundancyResolver:
 					print "Picked C-space edge",(iq,jq)
 					print "Original edge",wneighbors[jw]
 					print "Qlist",self.Gw.edge[iw][jw]['qlist']
-					raw_input()
+					#raw_input()
 			else:
 				if (jq,anchors.keys()[0]) not in self.Gw.edge[jw][iw]['qlist']:
 					print "Edge deleted from anchor to fixed neighbor anchor"
@@ -1285,7 +1291,7 @@ class RedundancyResolver:
 					print "Picked C-space edge",(iq,jq)
 					print "Original edge",wneighbors[jw]
 					print "Qlist",self.Gw.edge[iw][jw]['qlist']
-					raw_input()
+					#raw_input()
 
 		for jw in wneighbors:
 			jmanifold = self.Gw.node[jw]['qccs'][self.QccSubgraph[jw]]
@@ -1304,7 +1310,7 @@ class RedundancyResolver:
 				print "Chosen anchor",iq
 				print "Original edge",wneighbors[jw]
 				print self.Gw.edge[iw][jw]['qlist']
-				raw_input()
+				#raw_input()
 
 		return anchors.keys()[0],why
 
@@ -1399,8 +1405,10 @@ class RedundancyResolver:
 						assignedWEdges.add((jw,iw))
 						break
 
+			c = ProgressUpdater(len(neighbors))
 			numManifoldConfigs = sum(len(v) for k,v in failureManifolds.iteritems())
 			for jw in neighbors:
+				c.update()
 				if jw not in self.QccSubgraph:
 					continue
 				#might be missing a C-space edge from iw to jw?
@@ -1453,7 +1461,7 @@ class RedundancyResolver:
 			numValidEdges = 0
 			numTestedEdges = 0
 			stepcount = 0
-			for iw,imanifold in failureManifolds.iteritems():
+			for iw,imanifold in failureManifolds.items() + neighborHubs.items():
 				stepcount += len(self.Gw.neighbors(iw))
 			c = ProgressUpdater(stepcount,1)
 			if parallel:
@@ -1462,6 +1470,7 @@ class RedundancyResolver:
 				for iw,imanifold in failureManifolds.items() + neighborHubs.items():
 					for jw in self.Gw.neighbors(iw):
 						c.update()
+						if jw < iw: continue
 						jvals = None
 						if jw in failureWNodes:
 							jvals = failureManifolds[jw]
@@ -1469,6 +1478,25 @@ class RedundancyResolver:
 							jvals = neighborHubs[jw]
 						else:
 							continue
+						#determine which edges haven't been tested yet
+						edgesToTest = []
+						existingEdges = set(self.Gw.edge[iw][jw]['qlist'])
+						for iq in imanifold:
+							for jq in jvals:
+								if (iq,jq) not in existingEdges and (jq,iq) not in existingEdges:
+									edgesToTest.append((iq,jq))
+						numTestedEdges += len(edgesToTest)
+						tasks.put(('test-multi',iw,self.Gw.node[iw]['qlist'],self.Gw.node[iw]['params'],jw,self.Gw.node[jw]['qlist'],self.Gw.node[jw]['params'],edgesToTest))
+						if launched < threads:
+							launched += 1
+							continue
+						else:
+							res = results.get()
+							for (iw2,iq2,jw2,jq2) in res:
+								self.addEdge(iw2,iq2,jw2,jq2)
+								validValues[(iw2,jw2)].append((iq2,jq2))
+								numValidEdges += 1
+						"""
 						for iq in imanifold:
 							for jq in jvals:
 								numTestedEdges += 1
@@ -1483,10 +1511,19 @@ class RedundancyResolver:
 										self.addEdge(iw2,iq2,jw2,jq2)
 										validValues[(iw2,jw2)].append((iq2,jq2))
 										numValidEdges += 1
-				for i in range(threads):
+						"""
+				"""
+				for i in range(launched):
 					res = results.get()
 					valid,iw2,iq2,jw2,jq2 = res
 					if valid == True:
+						self.addEdge(iw2,iq2,jw2,jq2)
+						validValues[(iw2,jw2)].append((iq2,jq2))
+						numValidEdges += 1
+				"""
+				for i in range(launched):
+					res = results.get()
+					for (iw2,iq2,jw2,jq2) in res:
 						self.addEdge(iw2,iq2,jw2,jq2)
 						validValues[(iw2,jw2)].append((iq2,jq2))
 						numValidEdges += 1
@@ -1499,6 +1536,7 @@ class RedundancyResolver:
 				for iw,imanifold in failureManifolds.items() + neighborHubs.items():
 					for jw in self.Gw.neighbors(iw):
 						c.update()
+						if jw < iw: continue
 						jvals = None
 						if jw in failureWNodes:
 							jvals = failureManifolds[jw]
@@ -1537,7 +1575,6 @@ class RedundancyResolver:
 							neighborsinconflict.append(int(vname[5:]))
 						else:
 							failuresinconflict.append(int(vname[2:]))
-			print neighborHubs.keys()
 			print "# of centers in conflict",len(failuresinconflict)
 			print "# of neighbors in conflict",len(neighborsinconflict)
 			for v,vname in enumerate(csp.variables):
@@ -1751,7 +1788,7 @@ class RedundancyResolver:
 		joint-space path lengths using coordinate descent."""
 		Gresolution = self.resolution.getResolutionGraph()
 		for iters in xrange(numIters):
-			print "Iteration",iters
+			print "Iteration",iters,"/",numIters
 			sumdistances = 0
 			c = ProgressUpdater(Gresolution.number_of_nodes(),10)
 			for v in Gresolution.nodes_iter():
@@ -2099,7 +2136,7 @@ class ParallelResolver:
 				self.rr.Gw.node[uid]['qcc_parents'] = qcc_parents
 				self.stats.add(qccs)
 				c.update()
-		for i in range(self.threads):
+		for i in range(launched):
 			configs, qccs, qcc_parents, uid = self.results.get()
 			self.rr.Gw.node[uid]['qlist'] = configs
 			self.rr.Gw.node[uid]['qccs'] = qccs
@@ -2129,19 +2166,21 @@ class ParallelResolver:
 				jw = zw
 			di = self.rr.Gw.node[iw]
 			dj = self.rr.Gw.node[jw]
+			if len(di['qlist']) == 0 or len(dj['qlist']) == 0:
+				continue
 			self.tasks.put(('connect',iw,di['qlist'],di['qccs'],di['params'],jw,dj['qlist'],dj['qccs'],dj['params']))
 			if launched < self.threads:
 				launched += 1
 				continue
 			else:
 				result = self.results.get()
-				self.rr.Gw.edge[result[1]][result[2]]['qlist'] = result[0]
+				self.rr.Gw.edge[result[1]][result[2]]['qlist'] = set(result[0])
 				if len(result[0]) > 0:
 					self.stats.inc()
 				c.update()
-		for i in range(self.threads):
+		for i in range(launched):
 			result = self.results.get()
-			self.rr.Gw.edge[result[1]][result[2]]['qlist'] = result[0]
+			self.rr.Gw.edge[result[1]][result[2]]['qlist'] = set(result[0])
 			if len(result[0]) > 0:
 				self.stats.inc()
 			c.update()
@@ -2176,8 +2215,7 @@ class ParallelResolver:
 			self.rr.save(folder,close=True)
 		self.writeReport()
 		self.killWorkers()
-
-				
+			
 def worker(index, pdef, tasks, results):
 	pdef['worker'] = index
 	pdef['clean'] = True
@@ -2201,6 +2239,14 @@ def worker(index, pdef, tasks, results):
 		elif task[0] == 'test':
 			validity = resolution.validEdge(task[3],task[7],task[4],task[8])
 			results.put((validity, task[1], task[2], task[5], task[6]))
+		elif task[0] == 'test-multi':
+			iw,iqlist,iparams = task[1:4]
+			jw,jqlist,jparams = task[4:7]
+			edges = task[7]
+			validEdges = []
+			for iq,jq in edges:
+				if resolution.validEdge(iqlist[iq],jqlist[jq],iparams,jparams):
+					validEdges.append((iw,iq,jw,jq))
+			results.put(validEdges)
 		elif task[0] == 'kill':
 			return
-

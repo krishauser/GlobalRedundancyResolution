@@ -211,10 +211,6 @@ class RedundancyResolutionGraph:
 			self.world = world_or_robot
 			self.robot = world_or_robot.robot(0)
 		self.spinJoints = False
-		for i in xrange(self.robot.numLinks()):
- 			if self.robot.getJointType(i) == 'spin':
- 				print "NOTE: using spin joint distance calculation for walk path timing"
- 				self.spinJoints = True
 
 		self.domain = None
 		self.Gw = nx.Graph()
@@ -256,6 +252,12 @@ class RedundancyResolutionGraph:
 		if links:
 			self.ikTemplate.activeDofs = [robot.link(l).index for l in links]
 			assert all(v >= 0 for v in self.ikTemplate.activeDofs),"Invalid active DOF specified in JSON file"
+
+		for l in (self.ikTemplate.activeDofs if self.ikTemplate.activeDofs != None else range(self.robot.numLinks())):
+			if self.robot.getJointType(l) == 'spin':
+				print "NOTE: using spin joint distance calculation for walk path timing"
+				self.spinJoints = True
+				break
 
 		if orientation == 'fixed':
 			if fixedOrientation == None:
@@ -648,7 +650,7 @@ class RedundancyResolutionGraph:
 		nlinks = (self.robot.numLinks() if self.ikTemplate.activeDofs is None else len(self.ikTemplate.activeDofs))
 		epsilon *= math.sqrt(nlinks)
 		Ndivs = int(math.ceil(self.robot.distance(qa,qb)/epsilon))
-		discontinuityThreshold = epsilon*10
+		discontinuityThreshold = epsilon*nlinks
 
 		#this does a bisection technique and should be faster for infeasible edges
 		queue = deque()
@@ -672,7 +674,7 @@ class RedundancyResolutionGraph:
 			if d > discontinuityThreshold*(ib-ia):
 				#print "Discontinuity threshold exceeded mid-segment",d,discontinuityThreshold*(ib-ia)
 				return False
-			d = self.robot.distance(qm,q0)
+			d = self.robot.distance(qm,q1)
 			if d > discontinuityThreshold*(ib-ia):
 				#print "Discontinuity threshold exceeded mid-segment",d,discontinuityThreshold*(ib-ia)
 				return False
