@@ -36,7 +36,7 @@ To test whether you have correctly installed the prerequisites, in this folder r
 
 > python redundancy.py atlas
 
-You should then see the ATLAS robot and a previously computed redundancy resolution.  (The default visualization assumes that you have installed Klamp't in the user's home directory; if this is not the case you can edit the line ``` klampt_directory = os.path.expand("~/Klampt") ``` in grr/visualization.py.)
+You should then see the ATLAS robot and a previously computed redundancy resolution.  (The default visualization assumes that you have installed Klamp't in the user's home directory; if this is not the case you can edit the line ``` klampt_directory = os.path.expanduser("~/Klampt") ``` in grr/visualization.py.)
 
 
 ## File Structure

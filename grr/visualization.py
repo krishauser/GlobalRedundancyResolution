@@ -479,8 +479,8 @@ def read_options(problem,options,settings_file=None):
 	pdef['problem'] = problem
 	pdef.update(options)
 
-	klampt_directory = '/home/motion/Klampt/'
-	#klampt_directory = '/Program Files (x86)/Klampt/'
+	#TODO: change this if you have installed Klamp't in a different location
+	klampt_directory = os.path.expanduser('~/Klampt/')
 	filename = pdef['filename']
 	if not os.path.exists(filename):
 		if os.path.exists(os.path.join(klampt_directory,filename)):
