@@ -241,6 +241,8 @@ class RedundancyResolutionGraph:
 			#assume some klamp't code
 			fixedOrientation = eval(fixedOrientation)
 		self.domain = domain
+		#ensure domain is a bunch of floats in case theres any future divisions
+		self.domain = [float(v) for v in domain[0]],[float(v) for v in domain[1]]
 
 		#setup defaults
 		robot = self.robot
