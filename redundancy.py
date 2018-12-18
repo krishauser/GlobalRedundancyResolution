@@ -188,7 +188,6 @@ def make_program(pdef):
 	"""Loads a file from disk and returns an appropriately configured
 	RedundancyProgram.
 	"""
-	print('made it here')
 	makeParams = pdef
 	Nw=pdef.get('Nw',1000)
 	wgraphtype=pdef.get('workspace_graph','staggered_grid')	
