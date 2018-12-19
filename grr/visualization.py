@@ -15,6 +15,11 @@ import os
 import json
 import time
 
+#TODO: change this if you have installed Klamp't in a different location
+#or you are using the Klampt-examples project
+ROBOT_DATA_DIRECTORY = '~/Klampt/'
+#ROBOT_DATA_DIRECTORY = '~/Klampt-examples/'
+
 class GLRedundancyProgram(GLWidgetPlugin):
 	def __init__(self,world,robot):
 		GLWidgetPlugin.__init__(self)
@@ -479,16 +484,20 @@ def read_options(problem,options,settings_file=None):
 	pdef['problem'] = problem
 	pdef.update(options)
 
-	#TODO: change this if you have installed Klamp't in a different location
-	klampt_directory = os.path.expanduser('~/Klampt/')
+	klampt_directory = os.path.expanduser(ROBOT_DATA_DIRECTORY)
 	filename = pdef['filename']
 	if not os.path.exists(filename):
+		print "Absolute filename",filename,"doesn't exist, looking in",klampt_directory
 		if os.path.exists(os.path.join(klampt_directory,filename)):
 			filename = os.path.join(klampt_directory,filename)
 			pdef['filename'] = filename
 		elif os.path.exists(os.path.join(os.path.split(settings_file)[0],filename)):
 			filename = os.path.join(os.path.split(settings_file)[0],filename)
 			pdef['filename'] = filename
+		else:
+			print filename,"could not be found either in local directory or",klampt_directory
+	else:
+		print "Absolute filename",filename,"exists"
 
 	Nw=pdef.get('Nw',1000)
 	method=pdef.get('workspace_graph','staggered_grid')
