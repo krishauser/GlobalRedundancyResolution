@@ -38,15 +38,16 @@ def so3_grid(N):
 						R = so3.mul(so3.inv(R0),so3.from_quaternion(q))
 						G.add_node(idx,params=R)
 	for ax in range(4):
-		for i in xrange(N):
-			for j in xrange(N):
-				for k in xrange(N):
+		for i in xrange(N+1):
+			for j in xrange(N+1):
+				for k in xrange(N+1):
 					baseidx = [i,j,k]
 					idx = baseidx[:ax] + [N] + baseidx[ax:]
 					idx = tuple(idx)
 					for n in range(3):
 						nidx = baseidx[:]
 						nidx[n] += 1
+						if nidx[n] > N: continue
 						nidx = nidx[:ax] + [N] + nidx[ax:]
 						nidx = tuple(nidx)
 						G.add_edge(namemap[idx],namemap[nidx])
@@ -110,21 +111,23 @@ def so3_staggered_grid(N):
 						R = so3.mul(so3.inv(R0),so3.from_quaternion(q))
 						G.add_node(sidx,params=R)
 	for ax in range(4):
-		for i in xrange(N):
-			for j in xrange(N):
-				for k in xrange(N):
+		for i in xrange(N+1):
+			for j in xrange(N+1):
+				for k in xrange(N+1):
 					baseidx = [i,j,k]
 					idx = baseidx[:ax] + [N] + baseidx[ax:]
 					idx = tuple(idx)
 					for n in range(3):
 						nidx = baseidx[:]
 						nidx[n] += 1
+						if nidx[n] > N: continue
 						nidx = nidx[:ax] + [N] + nidx[ax:]
 						nidx = tuple(nidx)
 						G.add_edge(namemap[idx],namemap[nidx])
 
 					#edges between staggered point and grid points
 					baseidx = [i+0.5,j+0.5,k+0.5]
+					if any(v > N for v in baseidx): continue
 					idx = baseidx[:ax] + [N] + baseidx[ax:]
 					idx = tuple(idx)
 					for ofs in itertools.product(*[(-0.5,0.5)]*3):
@@ -195,3 +198,6 @@ def so3_grid_test(N=5,staggered=True):
 	print "Number of points:",G.number_of_nodes()
 	print "Min/max dispersion:",minDist,maxDist
 	vis.run()
+
+if __name__ == '__main__':
+    so3_grid_test(3,True)
