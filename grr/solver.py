@@ -195,6 +195,7 @@ class StatCollector:
 		if self.problem == None:
 			assert False, "stat collector problem must be initialized"
 		out_file = "experiments/" + self.problem + "_k_experiments.csv"
+		print "Writing report to",out_file
 		if not os.path.isdir("experiments"):
 			os.makedirs("experiments")
 		if not os.path.isfile(out_file):
@@ -295,6 +296,7 @@ class RedundancyResolver:
 				nx.read_gpickle(os.path.join(folder,"Gw_cached.pickle"))
 			else:
 				self.Gw.load(os.path.join(folder,"Gw_cached.pickle"))
+			print "Loaded",self.Gw.number_of_nodes(),'workspace nodes'
 		except:
 			self.resolution.load(folder)
 			#TODO: decide whether we want to import the resolution into the graph
@@ -318,9 +320,9 @@ class RedundancyResolver:
 				self.Qsubgraph[key] = value
 			f.close()
 		except IOError:
-			import traceback
-			traceback.print_exc()
-			print "Could not load Qsubgraph_cached.txt"
+			#import traceback
+			#traceback.print_exc()
+			print "Could not load Qsubgraph_cached.txt (this is OK, it just means you used the multithreaded solver)"
 			self.Qsubgraph = dict()
 		try:
 			f = open(os.path.join(folder,"QccSubgraph_cached.txt"),"r")
@@ -334,9 +336,9 @@ class RedundancyResolver:
 				self.QccSubgraph[key] = value
 			f.close()
 		except IOError:
-			import traceback
-			traceback.print_exc()
-			print "Could not load QccSubgraph_cached.txt"
+			#import traceback
+			#traceback.print_exc()
+			print "Could not load QccSubgraph_cached.txt (this is OK, it just means you did not use the multithreaded solver)"
 			self.QccSubgraph = dict()
 		
 		self.sanityCheck()
@@ -406,7 +408,7 @@ class RedundancyResolver:
 					if self.resolution.isResolvedEdge(i,j):
 						numEdgesInResolution += 1
 						sumdistances += self.robot.distance(self.resolution.Gw.node[i]['config'],self.resolution.Gw.node[j]['config'])
-						sumwsdistances += workspace_distance(self.resolution.Gw.node[i]['params'],self.resolution.Gw.node[j]['params'])
+						sumwsdistances += self.resolution.workspaceDistance(self.resolution.Gw.node[i]['params'],self.resolution.Gw.node[j]['params'])
 		print "Roadmap has",self.Gw.number_of_nodes(),"workspace nodes and",self.Gw.number_of_edges(),"edges"
 		print "  and",numConfigs,"configuration space nodes and",numCSpaceEdges,"edges"
 		print "  of %d nodes, %d have no configuration, and %d / %d are not in redundancy resolution"%(self.Gw.number_of_nodes(),self.Gw.number_of_nodes()-numNodes,numNodes-self.resolution.resolvedCount,numNodes)
@@ -1976,7 +1978,7 @@ class RedundancyResolver:
 		for (iw,data) in self.Gw.nodes_iter(data=True):
 			if len(data['qlist']) == 0: 
 				continue
-			d = workspace_distance(x,data['params']) 
+			d = self.resolution.workspaceDistance(x,data['params']) 
 			if d < dnmin:
 				nmin = iw
 				dnmin = d

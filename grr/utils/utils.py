@@ -34,28 +34,6 @@ def linf_distance(a,b,spin=False):
 	else:
 		return max(abs(v-w) for (v,w) in zip(a,b))
 
-def workspace_distance(a,b):
-	"""Returns a distance in R^n or SE(3) between points a and b.  If len(a)<=3, 
-	this will do cartesian distance.  Otherwise, len(a)==6 is required and
-	this will do SE(3) distance (with a max orientation distance of 1)."""
-	if len(a) <= 3:
-		return vectorops.distance(a,b)
-	assert len(a)==6,"Can only interpolate in R2, R3, or SE(3)"
-	dt = vectorops.distance(a[:3],b[:3])
-	dR = so3.distance(so3.from_moment(a[3:]),so3.from_moment(b[3:]))
-	return dt + dR/math.pi
-
-def workspace_interpolate(a,b,u):
-	"""Interpolates either in R^n or SE(3) between points a and b.  If len(a)<=3, 
-	this will do cartesian interpolation.  Otherwise, len(a)==6 is required and
-	this will do SE(3) interpolation."""
-	if len(a) <= 3:
-		return vectorops.interpolate(a,b,u)
-	assert len(a)==6,"Can only interpolate in R2, R3, or SE(3)"
-	Ra,Rb = so3.from_moment(a[3:]),so3.from_moment(b[3:])
-	R = so3.interpolate(Ra,Rb,u)
-	return vectorops.interpolate(a[:3],b[:3],u) + so3.moment(R)
-
 def mmult(A,b):
 	"""Matrix-vector multiplication with raw Python objects"""
 	v = []

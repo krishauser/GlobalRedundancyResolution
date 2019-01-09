@@ -3,6 +3,7 @@ from klampt.model import ik,trajectory,collide
 from klampt.math import vectorops,so3,se3
 from ikdb.ikproblem import IKProblem,IKSolverParams
 from utils.so3_grid import *
+from utils.sphere_grid import *
 import networkx as nx
 import scipy.spatial
 import itertools
@@ -15,6 +16,291 @@ from utils.metric import *
 from collections import deque
 import os
 
+DEFAULT_EDGE_CHECK_TOLERANCE = 5e-2
+
+def from_spherical(longitude,latitude,r=1):
+	dx = math.cos(longitude)
+	dy = math.sin(longitude)
+	z = math.sin(latitude)
+	dxy = math.cos(latitude)
+	return [dxy*dx*r,dxy*dy*r,z*r]
+
+def spherical(x,radius=True):
+	if radius:
+		r = [vectorops.norm(x)]
+	else:
+		r = []
+	den = math.sqrt(x[1]**2 + x[0]**2)
+	if den < 1e-8:
+		return [0,math.pi/2*x[2]/abs(x[2])] + r
+	else:
+		return [math.atan2(x[1],x[0]),math.atan2(x[2],den)] + r
+
+
+class IKTask:
+	"""Members:"
+	- objective: an IKObjective storing the current setting of the workspace parameters
+	- numConstraints: the number of elements in the constraint parameter vector
+	"""
+	def __init__(self,link,eelocal,orientation,orientationparams=None):
+		"""
+		- link: the link to be constrained
+		- eelocal: the local coordinates of the constrained point
+		- orientation: a string describing the rotational IK constraint. Can be:
+		  - free: no constraint (3DOF space)
+		  - variable: 6 DOF space
+		  - fixed: fixed orientation (3DOF space). orientationparams must be an so3 element describing the local -> world rotation.
+		  - axis: local rotation about an axis is not constrained  (2DOF space). orientationparams must be a 3-vector describing the local rotation axis.
+		- orientationparams: only meaningful with fixed and axis constraints
+		"""
+		self.objective = None 
+		self.orientation = orientation
+		self.numConstraints = 0
+		if orientation == 'free':
+			self.objective = ik.objective(link,local=eelocal,world=[0,0,0])
+			self.numConstraints = 3
+		elif orientation == 'variable':
+			T = se3.identity()
+			obj = ik.objective(link,R=T[0],t=T[1])
+			obj.setFixedPosConstraint(eelocal,[0,0,0])
+			self.objective = obj
+			self.numConstraints = 6
+		elif orientation == 'fixed':
+			assert isinstance(params,(list,tuple)) and len(params)==9,"must provide an so3 element as parameters for the orientation matrix"
+			#template is a fixed orientation matrix 
+			obj = ik.objective(link,R=orientationparams,t=[0,0,0])
+			obj.setFixedPosConstraint(eelocal,[0,0,0])
+			self.objective = obj
+			self.numConstraints = 3
+		elif orientation == 'axis':
+			#template is a fixed axis matrix
+			obj = ik.objective(link,local=eelocal,world=[0,0,0])
+			obj.setAxialRotConstraint(orientationparams,[0,0,1])
+			self.objective = obj
+			self.numConstraints = 5
+		else:
+			raise ValueError("orientation can only be free, variable, fixed, or axis")
+
+	def setParams(self,x):
+		"""Sets the current IK constraint to the workspace parameters x"""
+		assert len(x) == self.numConstraints
+		np = self.objective.numPosDims()
+		nr = self.objective.numRotDims()
+		assert np == 3 or np == 0,"Can only handle fixed or free position constraints"
+		assert nr == 3 or nr == 0 or nr == 2,"Can only handle fixed, free, or axis rotation constraints"
+		if np == 3:
+			assert len(x) >= 3
+			local,world = self.objective.getPosition()
+			self.objective.setFixedPosConstraint(local,x[0:3])
+		if nr == 3 and self.numConstraints == 6:
+			R = so3.from_moment(x[np:np+3])
+			self.objective.setFixedRotConstraint(R)
+		if nr == 2:
+			al,aw = self.objective.getRotationAxis()
+			#latitude and longitude
+			lon = x[np+0]
+			lat = x[np+1]
+			self.objective.setAxialRotConstraint(al,from_spherical(lon,lat))
+
+	def getParams(self,T):
+		"""Gets the workspace parameters for this constraint that match T exactly"""
+		np = self.objective.numPosDims()
+		nr = self.objective.numRotDims()
+		assert np == 3 or np == 0,"Can only handle fixed or free position constraints"
+		assert nr == 3 or nr == 0 or nr == 2,"Can only handle fixed, free, or axis rotation constraints"
+		if np == 3:
+			local,world = self.objective.getPosition()
+			x = se3.apply(T,local)
+		else:
+			x = []
+		if nr == 3 and self.numConstraints == 6:
+			x += so3.moment(T[0])
+		if nr == 2:
+			al,aw = self.objective.getRotationAxis()
+			aw = so3.apply(T[0],al)
+			x += spherical(aw,radius=False)
+		return x
+
+	def distance(self,a,b):
+		"""Returns a distance in workspace between points a and b.  If len(a)<=3, 
+		this will do cartesian distance.  Otherwise, len(a)==self.numConstraints is required and
+		this will do R^3 x S(2) (axis) or SE(3) (variable) distance (with a max orientation distance of 2)."""
+		if len(a) <= 3:
+			return vectorops.distance(a,b)
+		assert len(a)==self.numConstraints,"Can only interpolate in R^n, R^3 x S(2), or SE(3)"
+		dt = vectorops.distance(a[:3],b[:3])
+		if self.orientation == 'variable':
+			dR = so3.distance(so3.from_moment(a[3:]),so3.from_moment(b[3:]))/math.pi
+		elif self.orientation == 'axis':
+			xa = from_spherical(a[3],a[4])
+			xb = from_spherical(b[3],b[4])
+			dR = vectorops.distance(xa,xb)
+		else:
+			print "Warning: don't know how to handle distance() with orientation",self.orientation
+		return dt + dR
+
+	def interpolate(self,a,b,u):
+		"""Interpolates in workspace between points a and b.  If len(a)<=3, 
+		this will do cartesian interpolation.  Otherwise, len(a)==6 is required and
+		this will do SE(3) interpolation."""
+		if len(a) <= 3:
+			return vectorops.interpolate(a,b,u)
+		assert len(a)==self.numConstraints,"Can only interpolate in R^n, R^3 x S(2), or SE(3)"
+		x =vectorops.interpolate(a[:3],b[:3],u)
+		if self.orientation == 'variable':
+			Ra,Rb = so3.from_moment(a[3:]),so3.from_moment(b[3:])
+			R = so3.interpolate(Ra,Rb,u)
+			return x + so3.moment(R)
+		elif self.orientation == 'axis':
+			xa = from_spherical(a[3],a[4])
+			xb = from_spherical(b[3],b[4])
+			#TODO: handle antipodal points?
+			xu = vectorops.interpolate(xa,xb,u)
+			rx = spherical(vectorops.unit(xu),radius=False)
+			return x + rx
+		else:
+			print "Warning: don't know how to handle interpolate() with orientation",self.orientation
+		return x
+
+	def sample(self,domain):
+		"""Samples a point from the space of workspace parameters. domain is a 3D domain for the position component"""
+		x = [random.uniform(a,b) for (a,b) in zip(bmin,bmax)]
+		if self.orientation == 'variable':
+			#sample rotation uniformly
+			if len(x) == 3:
+				x += so3.moment(so3.sample())
+			else:
+				#assume domain is already 6D
+				assert len(x) == 6
+				x[3:6] = so3.moment(so3.sample())
+		elif self.orientation == 'axis':
+			assert len(x) == 3
+			lon = random.uniform(0,math.pi*2)
+			lat = random.uniform(-math.pi/2,math.pi/2)
+			x += [lon,lat]
+		return x
+
+	def grid(self,domain,celldim):
+		bmin,bmax = domain
+		if len(bmin) > 3:
+			bmin = bmin[:3]
+			bmax = bmax[:3]
+		divs = [max(int(math.ceil((b-a)/celldim)),1) for (a,b) in zip(bmin,bmax)]
+		Pgraph = nx.Graph()
+		for cell in itertools.product(*[range(n) for n in divs]):
+			params = [float(i)/float(div-1) for i,div in zip(cell,divs)]
+			x = [a+u*(b-a) for (a,b,u) in zip(bmin,bmax,params)]
+			Pgraph.add_node(tuple(cell),params=x)
+		print "Grid discretization added",Pgraph.number_of_nodes(),"workspace nodes"
+		for i in Pgraph.nodes_iter():
+			n = [v for v in i]
+			for dim in range(3):
+				n[dim] += 1
+				if tuple(n) in Pgraph.node:
+					Pgraph.add_edge(i,tuple(n))
+				n[dim] -= 1
+		if self.orientation == 'variable':
+			print "Creating rotation graph with N=",int(math.ceil(1.0/celldim))
+			#Rgraph = so3_staggered_grid(int(math.ceil(1.0/celldim)))
+			#create rotation graph
+			Rgraph = so3_grid(int(math.ceil(1.0/celldim)))
+			for n,d in Rgraph.nodes(data=True):
+				m = so3.moment(d['params'])
+				d['params'] = m
+			print "  ",Rgraph.number_of_nodes(),"nodes created"
+			#form cross product of self.Gw and Rgraph
+			CpGraph =  nx.cartesian_product(Pgraph,Rgraph)
+			print "Cartesian product graph has",CpGraph.number_of_nodes(),"nodes and",CpGraph.number_of_edges(),"edges"
+			return CpGraph
+		if self.orientation == 'axis':
+			print "Creating spherical graph with N=",int(math.ceil(1.0/celldim))
+			Rgraph = sphere_grid(int(math.ceil(1.0/celldim)))
+			for n,d in Rgraph.nodes(data=True):
+				m = spherical(d['params'],radius=False)
+				d['params'] = m
+			print "  ",Rgraph.number_of_nodes(),"nodes created"
+			#form cross product of self.Gw and Rgraph
+			CpGraph =  nx.cartesian_product(Pgraph,Rgraph)
+			print "Cartesian product graph has",CpGraph.number_of_nodes(),"nodes and",CpGraph.number_of_edges(),"edges"
+			return CpGraph
+		return Pgraph
+
+	def staggered_grid(self,domain,celldim):
+		bmin,bmax = domain
+		if len(bmin) > 3:
+			bmin = bmin[:3]
+			bmax = bmax[:3]
+		divs = [max(int(math.ceil((b-a)/celldim)),1) for (a,b) in zip(bmin,bmax)]
+		active = [(1 if b > a else 0) for (a,b) in zip(bmin,bmax)]
+		assert sum(active) >= 2,"Staggered grids don't make sense in dimension <= 1"
+		Pgraph = nx.Graph()
+		for cell in itertools.product(*[range(n) for n in divs]):
+			params = [float(i)/float(div-1) for i,div in zip(cell,divs)]
+			x = [a+u*(b-a) for (a,b,u) in zip(bmin,bmax,params)]
+			Pgraph.add_node(tuple(cell),params=x,center=False)
+			if all(i+a < div for (i,div,a) in zip(cell,divs,active)):
+				params = [(float(i)+0.5*a)/float(div-1) for i,div,a in zip(cell,divs,active)]
+				x = [a+u*(b-a) for (a,b,u) in zip(bmin,bmax,params)]
+				Pgraph.add_node(tuple([cell[0]+0.5,cell[1]+0.5,cell[2]+0.5]),params=x,center=True)
+		print "Grid discretization added",Pgraph.number_of_nodes(),"workspace nodes"
+		print [(b-a)/div for (a,b,div) in zip(bmin,bmax,divs)]
+		celldim = max((b-a)/div for (a,b,div) in zip(bmin,bmax,divs))
+		print "Connecting each workspace grid node within radius",celldim
+		for i,d in Pgraph.nodes_iter(data=True):
+			n = [v for v in i]
+			if d['center']:
+				n = [int(math.floor(v)) for v in i]
+				if sum(active) >= 3:
+					#connect to other centers
+					for dim,a in enumerate(active):
+						if not a: continue
+						else:
+							n[dim] += 1
+							n[dim] += 0.5
+							if tuple(n) in Pgraph.node:
+								Pgraph.add_edge(i,tuple(n))
+							n[dim] -= 0.5
+							n[dim] -= 1
+							n[dim] = int(n[dim])
+				#connect to corners
+				for ofs in [(0,0,0),(0,0,1),(0,1,0),(0,1,1),(1,0,0),(1,0,1),(1,1,0),(1,1,1)]:
+					n = [int(math.floor(v))+ofs[dim] for dim,v in enumerate(i)]
+					if tuple(n) in Pgraph.node:
+						Pgraph.add_edge(i,tuple(n))
+			else:
+				for dim,a in enumerate(active):
+					if not a: continue
+					else:
+						n[dim] += 1
+						if tuple(n) in Pgraph.node:
+							Pgraph.add_edge(i,tuple(n))
+						n[dim] -= 1
+		
+		if self.orientation == 'variable':
+			#create rotation graph
+			print "Creating staggered rotation graph with N=",int(math.ceil(1.0/celldim))
+			Rgraph = so3_staggered_grid(int(math.ceil(1.0/celldim)))
+			for n,d in Rgraph.nodes(data=True):
+				m = so3.moment(d['params'])
+				d['params'] = m
+			print "  ",Rgraph.number_of_nodes(),"nodes created"
+			#form cross product of self.Gw and Rgraph
+			CpGraph = nx.cartesian_product(Pgraph,Rgraph)
+			print "Cartesian product graph has",CpGraph.number_of_nodes(),"nodes and",CpGraph.number_of_edges(),"edges"
+			return CpGraph
+		if self.orientation == 'axis':
+			print "Creating staggered spherical graph with N=",int(math.ceil(1.0/celldim))-1
+			Rgraph = sphere_staggered_grid(int(math.ceil(1.0/celldim))-1)
+			for n,d in Rgraph.nodes(data=True):
+				m = spherical(d['params'],radius=False)
+				d['params'] = m
+			print "  ",Rgraph.number_of_nodes(),"nodes created"
+			#form cross product of self.Gw and Rgraph
+			CpGraph =  nx.cartesian_product(Pgraph,Rgraph)
+			print "Cartesian product graph has",CpGraph.number_of_nodes(),"nodes and",CpGraph.number_of_edges(),"edges"
+			return CpGraph
+		return Pgraph
+				
 class MeshTopology:
 	def __init__(self,verts=None,faces=None):
 		self.verts = verts
@@ -198,6 +484,7 @@ class RedundancyResolutionGraph:
 	- world: if not None, contains the robot and the obstacles used for collision avoidance
 	- robot: the robot used for the redundancy resolution
 	- domain: the workspace domain under consideration
+	- ikTaskSpace: stores the IKTasks for the problem under consideration.
 	- ikTemplate: stores the IK problem under consideration.
 	- ikSolverParams: defines parameters for the IK solver.
 	- nnw: (internally used) nearest neighbor structure for seeking workspace graph nodes
@@ -214,6 +501,7 @@ class RedundancyResolutionGraph:
 
 		self.domain = None
 		self.Gw = nx.Graph()
+		self.ikTaskSpace = []
 		self.ikTemplate = IKProblem()
 		self.ikTemplate.setJointLimits()
 		self.ikSolverParams = IKSolverParams()
@@ -228,7 +516,11 @@ class RedundancyResolutionGraph:
 
 	def readJsonSetup(self,jsonObj):
 		"""Reads the ik problem, the domain, and other workspace graph options from the
-		given json object (examples of the format is given in the problems/ directory)"""
+		given json object (examples of the format is given in the problems/ directory)
+
+		Note: this is unsafe to run on untrusted inputs due to the use of eval under the
+		eeorientation / fixedOrientation attributes.  To make this safe, comment out the
+		line that uses eval."""
 		pdef = jsonObj
 		orientation = pdef.get('orientation','free')
 		domain = pdef['domain']
@@ -236,10 +528,16 @@ class RedundancyResolutionGraph:
 		useCollision = pdef.get('useCollision',True)
 		link = pdef.get('link',None)
 		links = pdef.get('links',None)
+		eeorientation = pdef.get('eeorientation',None)
 		fixedOrientation = pdef.get('fixedOrientation',None)
-		if isinstance(fixedOrientation,str):
+		if fixedOrientation is not None:
+			print "Warning, fixedOrientation will be deprecated. Use eeorientation instead"
+			eeorientation = fixedOrientation
+		if isinstance(eeorientation,str):
 			#assume some klamp't code
-			fixedOrientation = eval(fixedOrientation)
+			eeorientation = eval(eeorientation)
+		eeaxis = pdef.get('eeaxis',None)
+
 		self.domain = domain
 		#ensure domain is a bunch of floats in case theres any future divisions
 		self.domain = [float(v) for v in domain[0]],[float(v) for v in domain[1]]
@@ -262,8 +560,11 @@ class RedundancyResolutionGraph:
 				break
 
 		if orientation == 'fixed':
-			if fixedOrientation == None:
-				fixedOrientation = link.getTransform()[0]
+			if eeorientation is None:
+				eeorientation = link.getTransform()[0]
+		if orientation == 'axis':
+			if eeaxis is None:
+				raise ValueError("Invalid problem setup, if orientation=axis then eeaxis must be specified")
 
 		movinglinks = []
 		stilllinks = []
@@ -310,9 +611,13 @@ class RedundancyResolutionGraph:
 
 		#now set up the problem
 		if orientation == 'fixed':
-			self.addIKConstraint(link,eelocal,orientation=fixedOrientation)
+			self.ikTaskSpace.append(IKTask(link,eelocal,orientation=orientation,orientationparams=eeorientation))
+		elif orientation == 'axis':
+			self.ikTaskSpace.append(IKTask(link,eelocal,orientation=orientation,orientationparams=eeaxis))
 		else:
-			self.addIKConstraint(link,eelocal,orientation=orientation)
+			if orientation not in ['variable','free']:
+				raise ValueError("Can only handle variable, free, fixed, or axis orientations")
+			self.ikTaskSpace.append(IKTask(link,eelocal,orientation=orientation))
 			if orientation == 'variable':
 				if len(domain[0])==3:
 					active = [1 if (a!=b) else 0 for (a,b) in zip(*domain)]
@@ -329,6 +634,7 @@ class RedundancyResolutionGraph:
 						domain = (domain[0]+[-math.pi]*3,domain[1]+[-math.pi]*3)
 				#need to change the domain
 				self.domain = domain
+		self.ikTemplate.addObjective(self.ikTaskSpace[-1].objective)
 		if useCollision:
 			self.ikTemplate.feasibilityTest = collisionFree
 
@@ -367,7 +673,7 @@ class RedundancyResolutionGraph:
 		assert self.domain != None,"called buildNearestNeighbors without a domain"
 		bmin,bmax = self.domain
 		if len(bmax) == 6:
-			self.nnw = NearestNeighbors(workspace_distance,'bruteforce')
+			self.nnw = NearestNeighbors(self.workspaceDistance,'bruteforce')
 		else:
 			self.nnw = NearestNeighbors(L2Metric,'kdtree')
 		for n,d in self.Gw.nodes_iter(data=True):
@@ -389,7 +695,7 @@ class RedundancyResolutionGraph:
 		for i,j,d in self.Gw.edges_iter(data=True):
 			if d.get('connected',False):
 				sumdistances += self.robot.distance(self.Gw.node[i]['config'],self.Gw.node[j]['config'])
-				sumwsdistances += workspace_distance(self.Gw.node[i]['params'],self.Gw.node[j]['params'])
+				sumwsdistances += self.workspaceDistance(self.Gw.node[i]['params'],self.Gw.node[j]['params'])
 		if numConnected != 0:
 			print "  Average configuration space distance:",sumdistances / numConnected
 			print "  Average configuration space distance / workspace distance:",sumdistances / sumwsdistances
@@ -427,41 +733,14 @@ class RedundancyResolutionGraph:
 				del d['connected']
 		self.resolvedCount = 0
 
-	def addIKConstraint(self,link,eelocal,orientation='free'):
-		"""Orientation can be free, variable, or a so3 element"""
-		if orientation == 'free':
-			self.ikTemplate.addObjective(ik.objective(link,local=eelocal,world=[0,0,0]))
-		elif orientation == 'variable':
-			T = se3.identity()
-			obj = ik.objective(link,R=T[0],t=T[1])
-			obj.setFixedPosConstraint(eelocal,[0,0,0])
-			self.ikTemplate.addObjective(obj)
-		else:
-			assert isinstance(orientation,(list,tuple))
-			#assume it's a fixed orientation matrix
-			obj = ik.objective(link,R=orientation,t=[0,0,0])
-			obj.setFixedPosConstraint(eelocal,[0,0,0])
-			self.ikTemplate.addObjective(obj)
-
 	def setIKProblem(self,x):
 		"""Given a workspace setting x, sets the self.ikTemplate problem so that
 		it corresponds with the workspace parameters x"""
 		n = 0
-		for obj in self.ikTemplate.objectives:
-			np = obj.numPosDims()
-			nr = obj.numRotDims()
-			assert n + np <= len(x)
-			assert np == 3 or np == 0,"Can only handle fixed or free position constraints"
-			assert nr == 3 or nr == 0,"Can only handle fixed or free rotation constraints"
-			if np == 3:
-				local,world = obj.getPosition()
-				obj.setFixedPosConstraint(local,x[n:n+3])
-			n += np
-			if nr == 3 and len(x) >= 3 + n:
-				assert n + nr <= len(x)
-				R = so3.from_moment(x[n:n+3])
-				obj.setFixedRotConstraint(R)
-				n += nr
+		for obj,task in zip(self.ikTemplate.objectives,self.ikTaskSpace):
+			assert(n + task.numConstraints <= len(x)),"Invalid size of workspace parameter vector"
+			task.setParams(x[n:n+task.numConstraints])
+			n += task.numConstraints
 		assert n == len(x),"Workspace parameters must be exactly the right number of variables in template IK constraint"
 
 	def getIKParameters(self,q):
@@ -469,20 +748,32 @@ class RedundancyResolutionGraph:
 		x = []
 		qOrig = self.robot.getConfig()
 		self.robot.setConfig(q)
-		for obj in self.ikTemplate.objectives:
+		for obj,task in zip(self.ikTemplate.objectives,self.ikTaskSpace):
 			link = self.robot.link(obj.link())
-			np = obj.numPosDims()
-			nr = obj.numRotDims()
-			assert np == 3 or np == 0,"Can only handle fixed or free position constraints"
-			assert nr == 3 or nr == 0,"Can only handle fixed or free rotation constraints"
-			if np == 3:
-				local,world = obj.getPosition()
-				x += link.getWorldPosition(local)
- 			if nr == 3 and len(self.domain[0]) >= 6:
- 				R = obj.getRotation()
- 				x += so3.moment(R)
+			x += task.getParams(link.getTransform())
 		self.robot.setConfig(qOrig)
 		return x
+
+	def workspaceDistance(self,xa,xb):
+		assert len(xa) == len(xb)
+		d = 0
+		n = 0
+		for task in self.ikTaskSpace:
+			assert(n + task.numConstraints <= len(xa)),"Invalid size of workspace parameter vector"
+			d += task.distance(xa[n:n+task.numConstraints],xb[n:n+task.numConstraints])
+			n += task.numConstraints
+		return d
+
+	def workspaceInterpolate(self,xa,xb,u):
+		assert len(xa) == len(xb)
+		res = []
+		n = 0
+		for task in self.ikTaskSpace:
+			assert(n + task.numConstraints <= len(xa)),"Invalid size of workspace parameter vector"
+			res.append(task.interpolate(xa[n:n+task.numConstraints],xb[n:n+task.numConstraints],u))
+			n += task.numConstraints
+		if len(res)==1: return res[0]
+		return sum(res,[])
 
 	def solve(self,qinit,x,testfeasibility=True):
 		"""Solves the IK problem at x with the starting config qinit.  Returns None if
@@ -540,7 +831,7 @@ class RedundancyResolutionGraph:
 					xnew = x[:3]+rxnew
 					knn += self.nnw.knearest(xnew,k)
 				#now subselect only the k nearest in terms of workspace distance
-				sortlist = [(workspace_distance(pt,x),pt,n) for pt,n in knn]
+				sortlist = [(self.workspaceDistance(pt,x),pt,n) for pt,n in knn]
 				knn = [(pt,n) for (d,pt,n) in sorted(sortlist)]
 				knn = knn[:k]
 		for pt,n in knn:
@@ -600,7 +891,7 @@ class RedundancyResolutionGraph:
 		r = s.getResidual()
 		return vectorops.norm(r)
 
-	def validEdgeSimple(self,qa,qb,wa,wb,epsilon=5e-2):
+	def validEdgeSimple(self,qa,qb,wa,wb,epsilon=DEFAULT_EDGE_CHECK_TOLERANCE):
 		ea = self.ikError(qb,wa)
 		eb = self.ikError(qa,wb)
 		if self.wRadius == None:
@@ -608,7 +899,7 @@ class RedundancyResolutionGraph:
 		emax = self.wRadius*0.5
 		#midpoint fast reject test
 		x = self.robot.interpolate(qa,qb,0.5)
-		if self.ikError(x,workspace_interpolate(wa,wb,0.5)) > emax:
+		if self.ikError(x,self.workspaceInterpolate(wa,wb,0.5)) > emax:
 			#print "Reject deviation from line too large at midpoint"
 			return False
 		#if self.ikError(x,wa) > ea or self.ikError(x,wb) > eb:
@@ -620,7 +911,7 @@ class RedundancyResolutionGraph:
 		for i in range(Ndivs):
 			u = float(i+1)/(Ndivs+1)
 			x = self.robot.interpolate(qa,qb,u)
-			eu = self.ikError(x,workspace_interpolate(wa,wb,u))
+			eu = self.ikError(x,self.workspaceInterpolate(wa,wb,u))
 			eau = self.ikError(x,wa)
 			ebu = self.ikError(x,wb)
 			#if eau < eaold:
@@ -643,7 +934,7 @@ class RedundancyResolutionGraph:
 					return False
 		return True
 
-	def validEdgeLinear(self,qa,qb,wa,wb,epsilon=1e-2):
+	def validEdgeLinear(self,qa,qb,wa,wb,epsilon=DEFAULT_EDGE_CHECK_TOLERANCE):
 		#ea = self.ikError(qb,wa)
 		#eb = self.ikError(qa,wb)
 		qprev = qa
@@ -668,7 +959,7 @@ class RedundancyResolutionGraph:
 			im = (ia+ib)/2
 			u = float(im)/(Ndivs+1)
 			x = self.robot.interpolate(qa,qb,u)
-			qm = self.solve(x,workspace_interpolate(wa,wb,u),testfeasibility=False)
+			qm = self.solve(x,self.workspaceInterpolate(wa,wb,u),testfeasibility=False)
 			if qm == None:
 				#print "Unable to solve",x
 				return False
@@ -690,7 +981,7 @@ class RedundancyResolutionGraph:
 		for i in range(Ndivs):
 			u = float(i+1)/(Ndivs+1)
 			x = self.robot.interpolate(qa,qb,u)
-			q = self.solve(x,workspace_interpolate(wa,wb,u),testfeasibility=False)
+			q = self.solve(x,self.workspaceInterpolate(wa,wb,u),testfeasibility=False)
 			if q == None:
 				#print "Unable to solve",x
 				return False
@@ -716,16 +1007,16 @@ class RedundancyResolutionGraph:
 
 	def interpolateEdgeLinear(self,qa,qb,wa,wb,u):
 		x = self.robot.interpolate(qa,qb,u)
-		q = self.solve(x,workspace_interpolate(wa,wb,u),testfeasibility=False)
+		q = self.solve(x,self.workspaceInterpolate(wa,wb,u),testfeasibility=False)
 		if q is None:
 			return self.robot.interpolate(qa,qb,u)
 		return q
 
-	def validEdgeBisection(self,qa,qb,wa,wb,epsilon=5e-2,c=0.9):
+	def validEdgeBisection(self,qa,qb,wa,wb,epsilon=DEFAULT_EDGE_CHECK_TOLERANCE,c=0.9):
 		d0 = self.robot.distance(qa,qb)
 		if d0 <= epsilon:
 			return True
-		wm = workspace_interpolate(wa,wb,0.5)
+		wm = self.workspaceInterpolate(wa,wb,0.5)
 		qm = self.robot.interpolate(qa,qb,0.5)
 		q = self.solve(qm,wm)
 		if q is None:
@@ -743,7 +1034,7 @@ class RedundancyResolutionGraph:
 		d0 = self.robot.distance(qa,qb)
 		if d0 <= epsilon:
 			return self.robot.interpolate(qa,qb,u)
-		wm = workspace_interpolate(wa,wb,0.5)
+		wm = self.workspaceInterpolate(wa,wb,0.5)
 		qm = self.robot.interpolate(qa,qb,0.5)
 		q = self.solve(qm,wm,testfeasibility=False)
 		if q is None:
@@ -784,10 +1075,7 @@ class RedundancyResolutionGraph:
 		dims = len([1 for (a,b) in zip(bmin,bmax) if a!=b])
 		if method == 'random':
 			for i in xrange(N):
-				x = [random.uniform(a,b) for (a,b) in zip(bmin,bmax)]
-				if len(bmin) == 6:
-					#sample rotation uniformly
-					x[3:6] = so3.sample()
+				x = sum([task.sample(domain) for task in self.ikTaskSpace],[])
 				self.addWorkspaceNode(x)
 			if k == 'auto':
 				k = int((1+1.0/dims)*math.e*math.log(N))
@@ -799,122 +1087,82 @@ class RedundancyResolutionGraph:
 				self.connectWorkspaceNeighbors(i,k=k+1)
 			c.done()
 		elif method == "grid":
-			add_so3 = False
-			if len(bmin) == 6:
-				add_so3 = True
+			if len(self.ikTaskSpace)!=1:
+				raise NotImplementedError("TODO: multiple task spaces")
+			task = self.ikTaskSpace[0]
+
+			rot_dims = 0
+			if task.numConstraints > 3:
+				rot_dims = task.numConstraints - 3
 				bmin = bmin[:3]
 				bmax = bmax[:3]
 
-			vol = (1 if not add_so3 else pow(math.pi,3.0))
+			vol = (1 if rot_dims==0 else pow(math.pi,rot_dims))
 			for (a,b) in zip(bmin,bmax):
 				if b > a:
 					vol *= (b-a)
 			cellvol = float(vol)/N
 			celldim = math.pow(cellvol,1.0/dims)
-			assert celldim > 0
-			divs = [max(int(math.ceil((b-a)/celldim)),1) for (a,b) in zip(bmin,bmax)]
-			for cell in itertools.product(*[range(n) for n in divs]):
-				params = [float(i)/float(div) for i,div in zip(cell,divs)]
-				x = [a+u*(b-a) for (a,b,u) in zip(bmin,bmax,params)]
-				self.addWorkspaceNode(x)
-			print "Grid discretization added",self.Gw.number_of_nodes(),"workspace nodes"
-			if k == 'auto':
-				celldim = max((b-a)/div for (a,b,div) in zip(bmin,bmax,divs))
-				for i in self.Gw.nodes_iter():
-					self.connectWorkspaceNeighbors(i,radius=celldim*1.05)
-			else:
-				for i,d in self.Gw.nodes_iter(data=True):
-					self.connectWorkspaceNeighbors(i,k=k+1)
-			if add_so3:
-				print "Creating staggered rotation graph with N=",int(math.ceil(1.0/celldim))
-				#Rgraph = so3_staggered_grid(int(math.ceil(1.0/celldim)))
-				#create rotation graph
-				Rgraph = so3_grid(int(math.ceil(1.0/celldim)))
-				print "  ",Rgraph.number_of_nodes(),"nodes created"
-				#form cross product of self.Gw and Rgraph
-				CpGraph = nx.cartesian_product(self.Gw,Rgraph)
-				print "Cartesian product graph has",CpGraph.number_of_nodes(),"nodes and",CpGraph.number_of_edges(),"edges"
-				#renumber, convert params from pair to 6D [translation,rotation moment] vectors
-				self.Gw = nx.Graph()
-				nodemap = dict()
-				for n,d in CpGraph.nodes(data=True):
+			assert celldim > 0				
+			TGraph = task.grid(self.domain,celldim)
+			
+			#renumber, convert params from pair to 6D [translation,rotation moment] vectors
+			self.Gw = nx.Graph()
+			nodemap = dict()
+			for n,d in TGraph.nodes(data=True):
+				if len(d['params']) == 2:
 					t = d['params'][0]
-					R = d['params'][1]
-					m = so3.moment(R)
-					nodemap[n] = self.Gw.number_of_nodes()
-					self.Gw.add_node(self.Gw.number_of_nodes(),params = t + m)
-				for i,j in CpGraph.edges():
-					self.Gw.add_edge(nodemap[i],nodemap[j])
-				#redo nearest neighbors structure
-				self.buildNearestNeighbors()
+					r = d['params'][1]
+					params = t + r
+				else:
+					params = d['params']
+				nodemap[n] = self.Gw.number_of_nodes()
+				self.Gw.add_node(self.Gw.number_of_nodes(),params = params)
+			for i,j in TGraph.edges():
+				self.Gw.add_edge(nodemap[i],nodemap[j])
+			#redo nearest neighbors structure
+			self.buildNearestNeighbors()
 				
 		elif method == "staggered_grid":
-			add_so3 = False
-			if len(bmin) == 6:
-				add_so3 = True
+			if len(self.ikTaskSpace)!=1:
+				raise NotImplementedError("TODO: multiple task spaces")
+			task = self.ikTaskSpace[0]
+
+			rot_dims = 0
+			if task.numConstraints > 3:
+				rot_dims = task.numConstraints - 3
 				bmin = bmin[:3]
 				bmax = bmax[:3]
-			
-			vol = 1 if not add_so3 else pow(math.pi,3)
+
+			vol = (1 if rot_dims==0 else pow(math.pi,rot_dims))
 			for (a,b) in zip(bmin,bmax):
 				if b > a:
 					vol *= (b-a)
+			#x2 to account for staggering
 			cellvol = 2*float(vol)/N
+			if task.numConstraints > 3:
+				#account for staggering in the rotational domain
+				cellvol *= pow(2,task.numConstraints-3)
 			celldim = math.pow(cellvol,1.0/dims)
 			assert celldim > 0
-			divs = [max(int(math.ceil((b-a)/celldim)),1) for (a,b) in zip(bmin,bmax)]
-			active = [(1 if b > a else 0) for (a,b) in zip(bmin,bmax)]
-			centers = []
-			for cell in itertools.product(*[range(n) for n in divs]):
-				params = [float(i)/float(div) for i,div in zip(cell,divs)]
-				x = [a+u*(b-a) for (a,b,u) in zip(bmin,bmax,params)]
-				self.addWorkspaceNode(x)
-				centers.append(False)
-				if all(i+a < div for (i,div,a) in zip(cell,divs,active)):
-					params = [(float(i)+0.5*a)/float(div) for i,div,a in zip(cell,divs,active)]
-					x = [a+u*(b-a) for (a,b,u) in zip(bmin,bmax,params)]
-					self.addWorkspaceNode(x)
-					centers.append(True)
-			print "Grid discretization added",self.Gw.number_of_nodes(),"workspace nodes"
-			if k == 'auto':
-				print [(b-a)/div for (a,b,div) in zip(bmin,bmax,divs)]
-				celldim = max((b-a)/div for (a,b,div) in zip(bmin,bmax,divs))
-				print "Connecting each workspace grid node within radius",celldim*math.sqrt(dims)*1.01
-				for i in self.Gw.nodes_iter():
-					if centers[i]:
-						if sum(active)==2:
-							self.connectWorkspaceNeighbors(i,radius=celldim*math.sqrt(dims)*0.5*1.01)
-						else:
-							self.connectWorkspaceNeighbors(i,radius=celldim*1.01)
-					else:
-						self.connectWorkspaceNeighbors(i,radius=celldim*1.01)
-			else:
-				for i,d in self.Gw.nodes_iter(data=True):
-					self.connectWorkspaceNeighbors(i,k=k+1)
-
-			if add_so3:
-				#create rotation graph
-				print "Translation graph has",self.Gw.number_of_nodes(),"nodes"
-				print "Creating staggered rotation graph with N=",int(math.ceil(1.0/celldim))
-				Rgraph = so3_staggered_grid(int(math.ceil(1.0/celldim)))
-				print "  ",Rgraph.number_of_nodes(),"nodes created"
-				#form cross product of self.Gw and Rgraph
-				CpGraph = nx.cartesian_product(self.Gw,Rgraph)
-				print "Cartesian product graph has",CpGraph.number_of_nodes(),"nodes and",CpGraph.number_of_edges(),"edges"
-				#renumber, convert params from pair to 6D [translation,rotation moment] vectors
-				self.Gw = nx.Graph()
-				nodemap = dict()
-				for n,d in CpGraph.nodes(data=True):
+			TGraph = task.staggered_grid(self.domain,celldim)
+			
+			#renumber, convert params from pair to 6D [translation,rotation moment] vectors
+			self.Gw = nx.Graph()
+			nodemap = dict()
+			for n,d in TGraph.nodes(data=True):
+				if len(d['params']) == 2:
 					t = d['params'][0]
-					R = d['params'][1]
-					m = so3.moment(R)
-					nodemap[n] = self.Gw.number_of_nodes()
-					self.Gw.add_node(self.Gw.number_of_nodes(),params = t + m)
-				for i,j in CpGraph.edges():
-					self.Gw.add_edge(nodemap[i],nodemap[j])
-					
-				#redo nearest neighbors structure
-				self.buildNearestNeighbors()
+					r = d['params'][1]
+					params = t + r
+				else:
+					params = d['params']
+				nodemap[n] = self.Gw.number_of_nodes()
+				self.Gw.add_node(self.Gw.number_of_nodes(),params = params)
+			for i,j in TGraph.edges():
+				self.Gw.add_edge(nodemap[i],nodemap[j])
+			#redo nearest neighbors structure
+			self.buildNearestNeighbors()
 		else:
 			raise ValueError("Unknown method "+method)
 			
@@ -925,7 +1173,7 @@ class RedundancyResolutionGraph:
 		for i,d in self.Gw.nodes_iter(data=True):
 			oldw = self.wRadius
 			for j in self.Gw.neighbors(i):
-				dist = workspace_distance(d['params'],self.Gw.node[j]['params'])
+				dist = self.workspaceDistance(d['params'],self.Gw.node[j]['params'])
 				self.wRadius = max(dist,self.wRadius)
 			if self.wRadius == oldw:
 				numSame += 1
@@ -976,14 +1224,14 @@ class RedundancyResolutionGraph:
 			#radius too small, look at neighbors
 			nn = self.Gw.neighbors(nw[0][1])
 			nw += [(self.Gw.node[n]['params'],n) for n in nn]
-			r = max(workspace_distance(x,self.Gw.node[n]['params']) for (xw,n) in nw)
-		#print "Point distances", [workspace_distance(self.Gw.node[n[1]]['params'],x) for n in nw]
+			r = max(self.workspaceDistance(x,self.Gw.node[n]['params']) for (xw,n) in nw)
+		#print "Point distances", [self.workspaceDistance(self.Gw.node[n[1]]['params'],x) for n in nw]
 		#print [self.Gw.node[n[1]] for n in nw]
 
 		closest = None
 		maxd = float('inf')
 		for (xw,iw) in nw:
-			d = workspace_distance(x,self.Gw.node[iw]['params'])
+			d = self.workspaceDistance(x,self.Gw.node[iw]['params'])
 			if d < maxd:
 				maxd = d
 				closest = iw
@@ -1041,7 +1289,7 @@ class RedundancyResolutionGraph:
 		for cc0 in ccs:
 			distances = []
 			for iw in cc0:
-				distances.append(workspace_distance(x,self.Gw.node[iw]['params']))
+				distances.append(self.workspaceDistance(x,self.Gw.node[iw]['params']))
 			mindist = min(distances)
 			weights = {}
 			if mindist < 1e-5:
@@ -1077,8 +1325,8 @@ class RedundancyResolutionGraph:
 			lipschitzConstant = 10
 			for i,(a,b,cc) in enumerate(zip(qs,self.lastqs,ccs)):
 				xstart = self.getIKParameters(a)
-				if self.robot.distance(a,b) > lipschitzConstant*workspace_distance(xstart,x):
-					print "Big change in configuration",i,"/",len(qs),"magnitude:",self.robot.distance(a,b),"relative to workspace distance",workspace_distance(xstart,x)
+				if self.robot.distance(a,b) > lipschitzConstant*self.workspaceDistance(xstart,x):
+					print "Big change in configuration",i,"/",len(qs),"magnitude:",self.robot.distance(a,b),"relative to workspace distance",self.workspaceDistance(xstart,x)
 					#print zip(a,b)
 					#print cc
 		self.lastqs = qs
@@ -1190,8 +1438,13 @@ class RedundancyResolutionGraph:
 
 
 	def closestOrientation(self,orientation):
-		"""For 6D variable-rotation graphs, extracts the moment representation of the orientation
-		in the graph closest to orientation."""
+		"""For variable-rotation and axis-rotation graphs, extracts the parameters of the orientation
+		in the graph closest to the input orientation.
+
+		orientation can either be an SO3 element (9-elements) or a workspace rotation parameter vector (rotation_vector or spherical coordinates)
+		"""
+		assert len(self.ikTaskSpace) == 1,"Can only handle one task at the moment"
+		task = self.ikTaskSpace[0]
 		if not hasattr(self,'allMoments'):
 			self.allMoments = dict()
 			for i,d in self.Gw.nodes(data=True):
@@ -1201,26 +1454,30 @@ class RedundancyResolutionGraph:
 					self.allMoments[m] = []
 				self.allMoments[m].append(i)
 			assert len(self.allMoments) * 10 < self.Gw.number_of_nodes(),"Is this a random 6D workspace graph?"
+		if len(orientation)==9:
+			oparams = task.getParams((orientation,[0,0,0]))[3:]
+		else:
+			assert len(orientation) == task.numConstraints-3
+			oparams = orientation
 		mbest = None
 		dbest = float('inf')
 		for m in self.allMoments:
-			R = so3.from_moment(m)
-			dist = so3.distance(orientation,R) 
+			dist = task.distance([0,0,0]+list(oparams),[0,0,0]+list(m)) 
 			if dist < dbest:
 				dbest = dist
 				mbest = m
 		return mbest
 
 	def extractOrientedSubgraph(self,orientation):
-		"""For 6D variable-rotation graphs, extracts the 3D subgraph most closely matched to 
-		the given orientation.  The result is (Rclosest,G) where Rclosest is the closest orientation
-		found and G is the 3D subgraph."""
+		"""For variable-rotation graphs, extracts the 3D subgraph most closely matched to 
+		the given orientation parameters.  The result is (Rclosest,G) where Rclosest is the closest
+		orientation parameters found and G is the 3D subgraph."""
 		#find the closest orientation in the graph
 		mbest = self.closestOrientation(orientation)
 		subgraph = self.allMoments[mbest]
 		print "Extracting rotation subgraph of size",len(subgraph)
 		G = nx.subgraph(self.Gw,subgraph)
-		return (so3.from_moment(mbest),G)
+		return (mbest,G)
 
 	def computeDiscontinuities(self,useboundary=False,orientation=None):
 		"""Computes a 2D segment mesh or 3D triangulated mesh illustrating the discontinuities
@@ -1314,7 +1571,7 @@ class RedundancyResolutionGraph:
 					l,u = 0.0,1.0
 					while u > l+resolution:
 						m = 0.5*(l+u)
-						x = workspace_interpolate(a,b,m)
+						x = self.workspaceInterpolate(a,b,m)
 						if self.solve(q0,x) is not None:
 							l = m
 						else:
@@ -1336,7 +1593,7 @@ class RedundancyResolutionGraph:
 						l,u = 0.0,1.0
 						while u > l+resolution:
 							m = 0.5*(l+u)
-							x = workspace_interpolate(a,b,m)
+							x = self.workspaceInterpolate(a,b,m)
 							if self.solve(q0,x) is not None:
 								l = m
 							else:
@@ -1348,7 +1605,7 @@ class RedundancyResolutionGraph:
 						l,u = 0.0,1.0
 						while u > l+resolution:
 							m = 0.5*(l+u)
-							x = workspace_interpolate(a,b,m)
+							x = self.workspaceInterpolate(a,b,m)
 							if self.solve(q1,x) is not None:
 								u = m
 							else:

@@ -18,7 +18,7 @@ import time
 #TODO: change this if you have installed Klamp't in a different location
 #or you are using the Klampt-examples project
 ROBOT_DATA_DIRECTORY = '~/Klampt/'
-#ROBOT_DATA_DIRECTORY = '~/Klampt-examples/'
+ROBOT_DATA_DIRECTORY = '~/Klampt-examples/'
 
 class GLRedundancyProgram(GLWidgetPlugin):
 	def __init__(self,world,robot):
@@ -53,13 +53,23 @@ class GLRedundancyProgram(GLWidgetPlugin):
 		
 		assert self.resolution.domain != None
 		print "Domain",self.resolution.domain
-		if len(self.resolution.domain[0]) == 6:
+		assert len(self.resolution.ikTaskSpace) == 1,"Can only do one task, for now"
+		task = self.resolution.ikTaskSpace[0]
+		if task.orientation == 'variable':
 			#if a 2D problem and want to show depth, turn this to true
 			active = [i for i,(a,b) in enumerate(zip(*self.resolution.domain)[:3]) if b!=a]
 			if len(active) <= 2:
 				self.rotationAsDepth = True
 			else:
 				self.rotationAsDepth = False
+			link = self.resolution.ikTemplate.objectives[0].link()
+			self.xformWidget.enableTranslation(True)
+			self.xformWidget.enableRotation(True)
+			print "Initial transform",self.robot.link(link).getTransform()
+			#self.xformWidget.set(*self.robot.link(link).getTransform())
+			self.addWidget(self.xformWidget)
+		elif task.orientation == 'axis':
+			self.rotationAsDepth = False
 			link = self.resolution.ikTemplate.objectives[0].link()
 			self.xformWidget.enableTranslation(True)
 			self.xformWidget.enableRotation(True)
@@ -129,7 +139,9 @@ class GLRedundancyProgram(GLWidgetPlugin):
 			glEnd()
 			glLineWidth(1.0)
 
-
+		assert len(self.resolution.ikTaskSpace)==1,"Can only do one task for now"
+		task = self.resolution.ikTaskSpace[0]
+		
 		#draw workspace graph
 		if self.drawWorkspaceRoadmap:
 			def drawWorkspaceRoadmap(orientation=None):
@@ -182,7 +194,7 @@ class GLRedundancyProgram(GLWidgetPlugin):
 							r,g,b = 1,0,1
 						else:
 							qd = self.robot.distance(G.node[i]['config'],G.node[j]['config'])
-							wd = workspace_distance(G.node[i]['params'],G.node[j]['params'])
+							wd = self.resolution.workspaceDistance(G.node[i]['params'],G.node[j]['params'])
 							u = 1.0 - math.exp(-max(0.0,2.0*qd/wd-1.0))
 							if u > 0.8:
 								r,g,b = 1,1.0-u*5.0,0.0
@@ -205,7 +217,7 @@ class GLRedundancyProgram(GLWidgetPlugin):
 					self.robot.setConfig(q0)
 					glDisable(GL_LIGHTING)
 					"""
-			if len(self.resolution.domain[0]) == 6:
+			if task.numConstraints > 3:
 				if not hasattr(self,'roadmapDisplayLists_by_orientation'):
 					self.roadmapDisplayLists_by_orientation = dict()
 					self.lastROrientation = None
@@ -220,7 +232,6 @@ class GLRedundancyProgram(GLWidgetPlugin):
 				if mbest not in self.roadmapDisplayLists_by_orientation:
 					print "Drawing new display list for moment",mbest
 					self.roadmapDisplayLists_by_orientation[mbest] = CachedGLObject()
-				orientation = so3.from_moment(mbest)
 				self.roadmapDisplayLists_by_orientation[mbest].draw(drawWorkspaceRoadmap,args=(orientation,))
 			else:
 				#there looks to be a bug in GL display lists for drawing lines...
@@ -283,7 +294,7 @@ class GLRedundancyProgram(GLWidgetPlugin):
 				glVertex3fv(self.workspaceToPoint(self.resolution.Gw.node[j]['params']))
 			glEnd()
 			"""
-			if len(self.resolution.domain[0]) == 6:
+			if task.numConstraints > 3:
 				if not hasattr(self,'disconnectionDisplayLists_by_orientation'):
 					self.disconnectionDisplayLists_by_orientation = dict()
 					self.lastOrientation = None
@@ -298,7 +309,6 @@ class GLRedundancyProgram(GLWidgetPlugin):
 				if mbest not in self.disconnectionDisplayLists_by_orientation:
 					print "Drawing new display list for moment",mbest
 					self.disconnectionDisplayLists_by_orientation[mbest] = CachedGLObject()
-				orientation = so3.from_moment(mbest)
 				self.disconnectionDisplayLists_by_orientation[mbest].draw(drawDisconnections,args=(orientation,))
 			else:
 				self.disconnectionDisplayList.draw(drawDisconnections)
@@ -317,10 +327,12 @@ class GLRedundancyProgram(GLWidgetPlugin):
 		self.do_click(x,y)
 
 	def do_click(self,x,y):
+		assert len(self.resolution.ikTaskSpace)==1,"Can only do one task for now"
+		task = self.resolution.ikTaskSpace[0]
 		if self.pointWidget.hasFocus():
 			p = self.pointWidget.get()
-			if len(self.resolution.domain[0]) == 6:
-				x = p+[0,0,0]
+			if task.numConstraints > 3:
+				x = p+[0]*(task.numConstraints-3)
 			else:
 				x = p
 			if self.mode == 'interpolate':
@@ -336,8 +348,7 @@ class GLRedundancyProgram(GLWidgetPlugin):
 			self.refresh()
 		if self.xformWidget.hasFocus():
 			R,t = self.xformWidget.get()
-			m = so3.moment(R)
-			x = t + m
+			x = task.getParams((R,t))
 			if self.mode == 'interpolate':
 				if self.solveConstraint:
 					qOrig = self.configs[0] if self.configs is not None else self.robot.getConfig()
