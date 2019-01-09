@@ -8,7 +8,7 @@ from OpenGL.GL import *
 import os
 import time
 import json
-
+import multiprocessing
 
 
 class RedundancyProgram(GLRedundancyProgram):
@@ -172,12 +172,24 @@ class RedundancyProgram(GLRedundancyProgram):
 		elif c == 't':
 			print("There are " + str(multiprocessing.cpu_count()) + " CPUs available.")
 			self.pr.setThreads(int(raw_input("Enter the number of threads you would like to spawn: ")))
+			print
+			print "Spawning workers..."
 			self.pr.spawnWorkers()
+			print
+			print "Beginning configuration sample..."
 			self.pr.superviseQSampling(Nq=self.Nq,k=self.visK)
+			print
+			print "Beginning edge tests sample..."
 			self.pr.superviseEdgeTests()
+			print
+			print "Done with worker threads, writing report"
 			self.pr.writeReport()
+			print
+			print "Solving CSP..."
 			self.pr.solveCSP()
 			self.pr.killWorkers()
+			print
+			print "Done"
 			self.roadmapDisplayList.markChanged()
 			self.disconnectionDisplayList.markChanged()
 		else:
