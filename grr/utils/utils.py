@@ -204,7 +204,7 @@ def triangles(G):
 	"""Returns the list of all triangles (triples of mutually connected nodes) in G.
 	Takes time O(nd^2) where n is the number of nodes in the graph and d is its degree"""
 	res = []
-	for i in G.nodes():
+	for i in G.nodes_iter():
 		Ni = set([j for j in G.neighbors(i) if j > i])
 		for j in Ni:
 			for k in Ni & set(G.neighbors(j)):
@@ -216,7 +216,7 @@ def tetrahedra(G):
 	"""Returns the list of all tetrahedra (4-tuples of mutually connected nodes) in G.
 	Takes time O(nd^3) where n is the number of nodes in the graph and d is its degree"""
 	res = []
-	for i in G.nodes():
+	for i in G.nodes_iter():
 		Ni = set([j for j in G.neighbors(i) if j > i])
 		for j in Ni:
 			Nij = Ni & set([k for k in G.neighbors(j) if k > j])
