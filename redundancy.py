@@ -85,13 +85,15 @@ class RedundancyProgram(GLRedundancyProgram):
 			print "Keyboard help:"
 			#print "- [space]: samples more points in the workspace (not very functional)"
 			print "INTERACTIVE SOLVER"
+			print "- p: performs pointwise redundancy resolution"
+			print "- a: performs the amoeba solver"
+			print "- p: performs pointwise redundancy resolution"
 			print "- q: samples more points in the configuration space (10 per workspace point)"
 			print "- Q: samples more points in the configuration space attempting to add more in poorly-sampled areas"
 			print "- c: samples more configurations at conflicting workspace edges"
 			print "- u: performs a CSP assignment"
 			print "- d: min-conflicts descent of the assignment"
 			print "- r: randomizes the assignment and then descends"
-			print "- p: performs pointwise redundancy resolution"
 			print "- o: 10 iterations of coordinate descent optimization of overall path length"
 			print "VISIBILITY GRAPH SOLVER"
 			print "- v: build the network using the visibility graph algorithm"
@@ -121,26 +123,22 @@ class RedundancyProgram(GLRedundancyProgram):
 			print "Sampling configurations at conflicting edges..."
 			self.rr.sampleConflicts()
 			self.rr.printStats()
-			self.roadmapDisplayList.markChanged()
-			self.disconnectionDisplayList.markChanged()
+			self.refreshResolution()
 		elif c == 'u':
 			print "Performing unique assignment..."
 			self.rr.uniqueAssignment()
 			self.rr.printStats()
-			self.roadmapDisplayList.markChanged()
-			self.disconnectionDisplayList.markChanged()
+			self.refreshResolution()
 		elif c == 'r':
 			print "Doing random descent..."
 			self.rr.randomDescentAssignment(True)
 			self.rr.printStats()
-			self.roadmapDisplayList.markChanged()
-			self.disconnectionDisplayList.markChanged()
+			self.refreshResolution()
 		elif c == 'd':
 			print "Doing descent..."
 			self.rr.randomDescentAssignment(False)
 			self.rr.printStats()
-			self.roadmapDisplayList.markChanged()
-			self.disconnectionDisplayList.markChanged()
+			self.refreshResolution()
 		elif c == 's':
 			print "Saving results..."
 			if self.folder == None:
@@ -154,21 +152,23 @@ class RedundancyProgram(GLRedundancyProgram):
 			print "Pointwise assignment..."
 			self.rr.pointwiseAssignment()
 			self.rr.printStats()
-			self.roadmapDisplayList.markChanged()
-			self.disconnectionDisplayList.markChanged()
+			self.refreshResolution()
+		elif c == 'a':
+			print "Amoeba assignment..."
+			self.rr.amoebaAssignment()
+			self.rr.printStats()
+			self.refreshResolution()
 		elif c == 'o':
 			print "Optimizing..."
 			self.rr.optimize()
 			self.rr.printStats()
-			self.roadmapDisplayList.markChanged()
-			self.disconnectionDisplayList.markChanged()
+			self.refreshResolution()
 		elif c == 'v':
 			self.rr.sampleConfigurationSpace(self.Nq,connect=True,visibility=True,k=20)
 		elif c == 'R':
 			self.rr.solveCSP(visibility=True)
 			self.rr.printStats()
-			self.roadmapDisplayList.markChanged()
-			self.disconnectionDisplayList.markChanged()
+			self.refreshResolution()
 		elif c == 't':
 			print("There are " + str(multiprocessing.cpu_count()) + " CPUs available.")
 			self.pr.setThreads(int(raw_input("Enter the number of threads you would like to spawn: ")))
@@ -190,8 +190,7 @@ class RedundancyProgram(GLRedundancyProgram):
 			self.pr.killWorkers()
 			print
 			print "Done"
-			self.roadmapDisplayList.markChanged()
-			self.disconnectionDisplayList.markChanged()
+			self.refreshResolution()
 		else:
 			GLRedundancyProgram.keyboardfunc(self,c,x,y)
 				
